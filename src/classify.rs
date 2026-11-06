@@ -97,6 +97,40 @@ fn source_of(uri: &str) -> Source {
     }
 }
 
+/// How an action from the specification's list (`actions.yaml`) affects the content.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Effect {
+    /// Rearranges, removes or re-encodes existing content, or touches none of it.
+    Preserves,
+    /// May add content of its own, such as drawing, text or a generic edit.
+    Adds,
+    /// Not a specification action, or `c2pa.unknown`: what it did can't be known.
+    Unknown,
+}
+
+fn effect_of(action: &str) -> Effect {
+    match action {
+        "c2pa.adjustedColor" | "c2pa.changedSpeed" | "c2pa.color_adjustments" | "c2pa.converted"
+        | "c2pa.cropped" | "c2pa.deleted" | "c2pa.edited.metadata" | "c2pa.enhanced"
+        | "c2pa.filtered" | "c2pa.mastered" | "c2pa.orientation" | "c2pa.published"
+        | "c2pa.redacted" | "c2pa.removed" | "c2pa.repackaged" | "c2pa.resized"
+        | "c2pa.resized.proportional" | "c2pa.reviewed" | "c2pa.transcoded" | "c2pa.trimmed"
+        | "c2pa.watermarked" | "c2pa.watermarked.bound" | "c2pa.watermarked.unbound" => {
+            Effect::Preserves
+        }
+        "c2pa.unknown" => Effect::Unknown,
+        a if a.starts_with("c2pa.") || a.starts_with("font.") => Effect::Adds,
+        _ => Effect::Unknown,
+    }
+}
+
+/// Source types that declare any AI involvement, generative or not.
+fn declares_ai_use(uri: &str) -> bool {
+    matches!(source_of(uri), Source::Ai | Source::IncludesAi)
+        || uri == format!("{IPTC}computationalCapture")
+        || uri == format!("{IPTC}algorithmicallyEnhanced")
+}
+
 fn short(uri: &str) -> &str {
     uri.rsplit('/').next().unwrap_or(uri)
 }
@@ -281,6 +315,9 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
     let mut notes = Vec::new();
     let mut ai_signal = false;
     let mut unclear = false;
+    // A later action may have added content that isn't AI, so an AI origin is no longer all.
+    let mut mixed = false;
+    let mut ai_use_declared = false;
     let mut origin = None;
     let mut empty_origin = false;
 
@@ -313,15 +350,37 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
                 origin = Some(v);
             }
             ("c2pa.deleted", _) => notes.push("c2pa.deleted removes a component".into()),
+            // Placed content is judged by its componentOf ingredient below.
+            ("c2pa.placed", _) => {}
             (_, Some(uri)) => {
                 notes.push(format!("{name} as {}", short(uri)));
+                ai_use_declared |= declares_ai_use(uri);
+                let adds = effect_of(name) != Effect::Preserves;
                 match source_of(uri) {
-                    Source::Ai | Source::IncludesAi => ai_signal = true,
+                    // Generative augmentation of AI content keeps it AI...
+                    Source::Ai => ai_signal = true,
+                    Source::IncludesAi if uri == format!("{IPTC}compositeWithTrainedAlgorithmicMedia") => {
+                        ai_signal = true
+                    }
+                    // ...but compositeSynthetic declares a mix with other elements.
+                    Source::IncludesAi => {
+                        ai_signal = true;
+                        mixed = true;
+                    }
                     Source::Unclear => unclear = true,
-                    Source::NoAi | Source::Empty | Source::HumanEdits => {}
+                    Source::NoAi | Source::Empty | Source::HumanEdits => mixed |= adds,
                 }
             }
-            _ => {}
+            (_, None) => match effect_of(name) {
+                Effect::Preserves => {}
+                // A specification action that adds content without declaring a source type
+                // isn't assumed generative, but it does mean the content isn't all AI.
+                Effect::Adds => mixed = true,
+                Effect::Unknown => {
+                    notes.push(format!("{name} has unknown effect and no digitalSourceType"));
+                    unclear = true;
+                }
+            },
         }
     }
 
@@ -333,9 +392,21 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
         }
     };
 
+    // The disclosure names AI/ML models but not that they generated content. With a source
+    // type that already declares AI use it adds nothing; without one, a model was used in an
+    // undeclared way.
+    for a in &actions {
+        if let Some(uri) = a["digitalSourceType"].as_str() {
+            ai_use_declared |= declares_ai_use(uri);
+        }
+    }
     if m["assertions"].as_array().into_iter().flatten().any(|a| a["label"] == "c2pa.ai-disclosure") {
-        notes.push("c2pa.ai-disclosure present".into());
-        ai_signal = true;
+        if ai_use_declared || matches!(origin, Verdict::Ai | Verdict::IncludesAi) || ai_signal {
+            notes.push("c2pa.ai-disclosure present".into());
+        } else {
+            notes.push("c2pa.ai-disclosure present but no source type declares AI use".into());
+            unclear = true;
+        }
     }
     for (v, why) in &components {
         notes.push(format!("component: {why}"));
@@ -352,9 +423,13 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
     let components_all_ai = components.iter().all(|(v, _)| *v == Verdict::Ai);
     let all_ai_inputs = components_all_ai
         && (origin == Verdict::Ai || (empty_origin && !components.is_empty()));
-    // "Entirely AI" needs the whole history: an unrecorded or unclear later change could have
-    // added content that isn't AI. Without it, AI is still known to be present.
-    let verdict = if all_ai_inputs && complete && !unclear {
+    if mixed && all_ai_inputs {
+        notes.push("a later action may have added non-AI content".into());
+    }
+    // "Entirely AI" needs the whole history: an unrecorded, unclear or content-adding later
+    // change could have added content that isn't AI. Without it, AI is still known to be in the
+    // provenance, and nothing shows it was removed.
+    let verdict = if all_ai_inputs && complete && !unclear && !mixed {
         Verdict::Ai
     } else if all_ai_inputs || origin == Verdict::Ai || origin == Verdict::IncludesAi || ai_signal {
         Verdict::IncludesAi
@@ -455,6 +530,58 @@ mod tests {
         assert_eq!(merged.len(), 3);
         assert_eq!(merged[2]["digitalSourceType"], FILL);
         assert!(merged[1].get("related").is_none());
+    }
+
+    fn single(actions: Value) -> Verdict {
+        classify_store(&[("m", actions, json!([]), false)])
+    }
+
+    const HUMAN_EDITS: &str = "http://cv.iptc.org/newscodes/digitalsourcetype/humanEdits";
+    const SYNTHETIC: &str = "http://cv.iptc.org/newscodes/digitalsourcetype/compositeSynthetic";
+
+    #[test]
+    fn later_edits_decide_whether_ai_origin_stays_entirely_ai() {
+        let after_ai = |edit: Value| {
+            single(json!({ "actions": [{ "action": "c2pa.created", "digitalSourceType": AI }, edit], "allActionsIncluded": true }))
+        };
+        // Preserving edits and generative augmentation keep it AI.
+        assert_eq!(after_ai(json!({ "action": "c2pa.cropped" })), Verdict::Ai);
+        assert_eq!(after_ai(json!({ "action": "c2pa.edited", "digitalSourceType": FILL })), Verdict::Ai);
+        // Human drawing, an explicitly mixed edit, or a generic edit may add non-AI content.
+        assert_eq!(after_ai(json!({ "action": "c2pa.drawing", "digitalSourceType": HUMAN_EDITS })), Verdict::IncludesAi);
+        assert_eq!(after_ai(json!({ "action": "c2pa.edited", "digitalSourceType": SYNTHETIC })), Verdict::IncludesAi);
+        assert_eq!(after_ai(json!({ "action": "c2pa.edited" })), Verdict::IncludesAi);
+    }
+
+    #[test]
+    fn unrecognised_action_keeps_complete_history_uncertain() {
+        let actions = json!({
+            "actions": [{ "action": "c2pa.created", "digitalSourceType": CAPTURE }, { "action": "com.fabrikam.stylize" }],
+            "allActionsIncluded": true,
+        });
+        assert_eq!(single(actions), Verdict::Unknown);
+    }
+
+    #[test]
+    fn omitted_all_actions_included_means_possibly_incomplete() {
+        // Older v2 assertions could omit the field; consumers read that as "maybe incomplete".
+        let actions = json!({ "actions": [{ "action": "c2pa.created", "digitalSourceType": CAPTURE }] });
+        assert_eq!(single(actions), Verdict::Unknown);
+    }
+
+    #[test]
+    fn template_precedence_is_wildcard_then_named_then_action() {
+        let actions = json!({
+            "actions": [{ "action": "c2pa.created", "description": "own" }],
+            "templates": [
+                { "action": "c2pa.created", "digitalSourceType": AI, "description": "named" },
+                { "action": "*", "digitalSourceType": CAPTURE, "description": "wildcard", "softwareAgent": { "name": "w" } },
+            ],
+        });
+        let merged = &merged_actions(&actions)[0];
+        assert_eq!(merged["digitalSourceType"], AI);
+        assert_eq!(merged["description"], "own");
+        assert_eq!(merged["softwareAgent"]["name"], "w");
     }
 
     #[test]

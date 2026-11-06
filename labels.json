@@ -82,6 +82,20 @@
     "classifierReason": "created as empty; component: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia"
   },
   {
+    "file": "files/ai/a12_ai_then_generative_inpaint.jpg",
+    "expected": "ai",
+    "description": "a01 with a region inpainted by generative AI. IPTC defines compositeWithTrainedAlgorithmicMedia as generative augmentation, so the content stays AI.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia; c2pa.edited as compositeWithTrainedAlgorithmicMedia"
+  },
+  {
+    "file": "files/ai/a13_text_to_image_with_reference_input.jpg",
+    "expected": "ai",
+    "description": "Text-to-image with an unsigned reference image as an inputTo ingredient. An input to the model is not placed content, so its unknown provenance doesn't matter.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia"
+  },
+  {
     "file": "files/no-ai/n01_camera_capture.jpg",
     "expected": "no-ai",
     "description": "Simulated camera capture: digitalCapture.",
@@ -215,6 +229,27 @@
     "classifierReason": "created as empty; component: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia; component: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture"
   },
   {
+    "file": "files/includes-ai/i13_ai_with_hand_drawn_annotation.jpg",
+    "expected": "includes-ai",
+    "description": "a01 with a hand-drawn annotation (c2pa.drawing, humanEdits): human content added without an ingredient.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia; c2pa.drawing as humanEdits; a later action may have added non-AI content"
+  },
+  {
+    "file": "files/includes-ai/i14_ai_then_composite_synthetic_edit.jpg",
+    "expected": "includes-ai",
+    "description": "a01 edited as compositeSynthetic, which declares a mix of elements, so it is no longer entirely AI.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia; c2pa.edited as compositeSynthetic; a later action may have added non-AI content"
+  },
+  {
+    "file": "files/includes-ai/i15_mixed_cropped_away_from_ai.jpg",
+    "expected": "includes-ai",
+    "description": "i02 cropped so the placed AI element is outside the frame. A crop doesn't say what it removed, so the AI is still in the provenance and its removal isn't established.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; component: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia"
+  },
+  {
     "file": "files/no-ai/n07_ai_component_deleted.jpg",
     "expected": "no-ai",
     "description": "i02 with its AI component removed, recorded by c2pa.deleted. AI is in the history but not in the current content.",
@@ -227,6 +262,13 @@
     "description": "As n07, but the deletion's ingredient reference comes from a template's deprecated templateParameters, which consumers must still merge.",
     "validationState": "Trusted",
     "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.deleted removes a component"
+  },
+  {
+    "file": "files/no-ai/n10_computational_capture_with_model_disclosure.jpg",
+    "expected": "no-ai",
+    "description": "computationalCapture with a c2pa.ai-disclosure naming a scikit-learn model: non-generative AI that the source type already declares.",
+    "validationState": "Trusted",
+    "classifierReason": "created as computationalCapture; c2pa.ai-disclosure present"
   },
   {
     "file": "files/unknown/u01_no_manifest.jpg",
@@ -304,6 +346,20 @@
     "description": "virtualRecording allows synthetic, possibly generative, elements.",
     "validationState": "Trusted",
     "classifierReason": "created as virtualRecording"
+  },
+  {
+    "file": "files/unknown/u14_capture_with_model_disclosure.jpg",
+    "expected": "unknown",
+    "description": "digitalCapture with a c2pa.ai-disclosure, but no source type declares AI use: a model was used in some undeclared way.",
+    "validationState": "Trusted",
+    "classifierReason": "created as digitalCapture; c2pa.ai-disclosure present but no source type declares AI use"
+  },
+  {
+    "file": "files/unknown/u15_capture_then_custom_action.jpg",
+    "expected": "unknown",
+    "description": "n01 with an entity-specific action and no digitalSourceType. The history is complete, but what that action did is unknown.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; com.northwindtraders.stylize has unknown effect and no digitalSourceType"
   },
   {
     "file": "files/unknown/u13_empty_with_unknown_component.jpg",

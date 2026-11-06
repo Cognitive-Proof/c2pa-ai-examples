@@ -76,6 +76,11 @@ fn disclosure(level: &str) -> Value {
     })
 }
 
+/// A disclosure that names a model but says nothing about what it produced.
+fn model_disclosure(model_type: &str, name: &str) -> Value {
+    json!({ "modelType": model_type, "modelName": name })
+}
+
 fn mime(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("jpg") => "image/jpeg",
@@ -334,6 +339,14 @@ fn main() -> Result<()> {
     sources::paste(&mut with_photo, &photo, 360, 260, 240, 180);
     with_photo.save(g.src("dream-with-photo.jpg"))?;
     sources::adjust(&dream).save(g.src("dream-adjusted.jpg"))?;
+    let mut inpainted = dream.clone();
+    sources::paste(&mut inpainted, &sources::dream(2.5), 380, 210, 200, 180);
+    inpainted.save(g.src("dream-inpainted.jpg"))?;
+    let mut annotated = dream.clone();
+    sources::paste(&mut annotated, &sources::illustration(), 420, 300, 180, 140);
+    annotated.save(g.src("dream-annotated.jpg"))?;
+    // i02's pixels cropped to the region away from its placed AI element.
+    image::imageops::crop_imm(&with_ai, 280, 220, 360, 260).to_image().save(g.src("placed-cropped-no-ai.jpg"))?;
     let mut with_unsigned = dream.clone();
     sources::paste(&mut with_unsigned, &sources::photo(3), 360, 260, 240, 180);
     with_unsigned.save(g.src("dream-with-unsigned.jpg"))?;
@@ -427,12 +440,27 @@ fn main() -> Result<()> {
         &[component("ai-element", &a01)],
         "Blank canvas (empty) whose only content is a01.")?;
 
+    g.sign(Ai, "a12_ai_then_generative_inpaint.jpg", &g.src("dream-inpainted.jpg"),
+        actions(vec![opened(), json!({
+            "action": "c2pa.edited",
+            "digitalSourceType": dst("compositeWithTrainedAlgorithmicMedia"),
+            "softwareAgent": model(),
+            "description": "Inpainted a region",
+        })], true),
+        &[parent(&a01)],
+        "a01 with a region inpainted by generative AI. IPTC defines compositeWithTrainedAlgorithmicMedia as generative augmentation, so the content stays AI.")?;
+    let reference = g.src("photo-unsigned.jpg");
+    g.sign(Ai, "a13_text_to_image_with_reference_input.jpg", &g.src("dream.jpg"),
+        actions(vec![created("trainedAlgorithmicMedia", model(), "Generated from a prompt and a reference image")], true),
+        &[Ing { relationship: "inputTo", id: "reference", path: &reference, source_type: None }],
+        "Text-to-image with an unsigned reference image as an inputTo ingredient. An input to the model is not placed content, so its unknown provenance doesn't matter.")?;
+
     // ---- no-ai: the declared, complete history has no trained model in the current content -
     let n01 = g.sign(NoAi, "n01_camera_capture.jpg", &g.src("photo.jpg"),
         actions(vec![created("digitalCapture", camera(), "Captured by camera")], true), &[],
         "Simulated camera capture: digitalCapture.")?;
     g.sign(NoAi, "n02_capture_cropped_and_adjusted.jpg", &g.src("photo-cropped-adjusted.jpg"),
-        actions(vec![opened(), edit("c2pa.cropped", editor()), edit("c2pa.color_adjustments", editor())], true),
+        actions(vec![opened(), edit("c2pa.cropped", editor()), edit("c2pa.adjustedColor", editor())], true),
         &[parent(&n01)],
         "n01 cropped and colour-adjusted; only non-generative edits.")?;
     g.sign(NoAi, "n03_digital_illustration.png", &g.src("illustration.png"),
@@ -523,6 +551,29 @@ fn main() -> Result<()> {
         &[component("ai-element", &a01), component("photo", &n01)],
         "Blank canvas (empty) with a01 and n01 placed on it.")?;
 
+    g.sign(IncludesAi, "i13_ai_with_hand_drawn_annotation.jpg", &g.src("dream-annotated.jpg"),
+        actions(vec![opened(), json!({
+            "action": "c2pa.drawing",
+            "digitalSourceType": dst("humanEdits"),
+            "softwareAgent": editor(),
+            "description": "Hand-drawn annotation",
+        })], true),
+        &[parent(&a01)],
+        "a01 with a hand-drawn annotation (c2pa.drawing, humanEdits): human content added without an ingredient.")?;
+    g.sign(IncludesAi, "i14_ai_then_composite_synthetic_edit.jpg", &g.src("collage.jpg"),
+        actions(vec![opened(), json!({
+            "action": "c2pa.edited",
+            "digitalSourceType": dst("compositeSynthetic"),
+            "softwareAgent": agent("Northwind Layout", "5.1"),
+            "description": "Combined with other elements",
+        })], true),
+        &[parent(&a01)],
+        "a01 edited as compositeSynthetic, which declares a mix of elements, so it is no longer entirely AI.")?;
+    g.sign(IncludesAi, "i15_mixed_cropped_away_from_ai.jpg", &g.src("placed-cropped-no-ai.jpg"),
+        actions(vec![opened(), edit("c2pa.cropped", editor())], true),
+        &[parent(&i02)],
+        "i02 cropped so the placed AI element is outside the frame. A crop doesn't say what it removed, so the AI is still in the provenance and its removal isn't established.")?;
+
     let target = component_ref(&g.ctx, &i02)?;
     g.sign_with(NoAi, "n07_ai_component_deleted.jpg", &g.src("photo.jpg"), &[parent(&i02)],
         "i02 with its AI component removed, recorded by c2pa.deleted. AI is in the history but not in the current content.", |b| {
@@ -532,6 +583,13 @@ fn main() -> Result<()> {
     g.sign_with(NoAi, "n09_ai_component_deleted_via_template_parameters.jpg", &g.src("photo.jpg"), &[parent(&i02)],
         "As n07, but the deletion's ingredient reference comes from a template's deprecated templateParameters, which consumers must still merge.", |b| {
             b.add_assertion("c2pa.actions.v2", &deleted_actions(target, true)?)?;
+            Ok(())
+        })?;
+
+    g.sign_with(NoAi, "n10_computational_capture_with_model_disclosure.jpg", &g.src("photo-hdr.jpg"), &[],
+        "computationalCapture with a c2pa.ai-disclosure naming a scikit-learn model: non-generative AI that the source type already declares.", |b| {
+            b.add_assertion("c2pa.actions.v2", &actions(vec![created("computationalCapture", camera(), "Automatic HDR merge")], true))?;
+            b.add_assertion("c2pa.ai-disclosure", &model_disclosure("c2pa.types.model.sklearn", "Northwind Exposure Fusion"))?;
             Ok(())
         })?;
 
@@ -553,7 +611,7 @@ fn main() -> Result<()> {
 
     let unsigned = g.src("photo-unsigned.jpg");
     g.sign(Unknown, "u04_edited_from_unsigned_parent.jpg", &g.src("photo-unsigned-adjusted.jpg"),
-        actions(vec![opened(), edit("c2pa.color_adjustments", editor())], true), &[parent(&unsigned)],
+        actions(vec![opened(), edit("c2pa.adjustedColor", editor())], true), &[parent(&unsigned)],
         "Signed edit of a parent that has neither a manifest nor a declared source type.")?;
 
     let u05 = g.out(Unknown, "u05_tampered_capture.jpg");
@@ -594,6 +652,15 @@ fn main() -> Result<()> {
         actions(vec![created("virtualRecording", agent("Northwind Studio", "1.0"), "Recording of a virtual set")], true), &[],
         "virtualRecording allows synthetic, possibly generative, elements.")?;
 
+    g.sign_with(Unknown, "u14_capture_with_model_disclosure.jpg", &g.src("photo-adjusted.jpg"), &[],
+        "digitalCapture with a c2pa.ai-disclosure, but no source type declares AI use: a model was used in some undeclared way.", |b| {
+            b.add_assertion("c2pa.actions.v2", &actions(vec![created("digitalCapture", camera(), "Captured by camera")], true))?;
+            b.add_assertion("c2pa.ai-disclosure", &model_disclosure("c2pa.types.model.pytorch", "Northwind Scene Model"))?;
+            Ok(())
+        })?;
+    g.sign(Unknown, "u15_capture_then_custom_action.jpg", &g.src("photo-adjusted.jpg"),
+        actions(vec![opened(), edit("com.northwindtraders.stylize", editor())], true), &[parent(&n01)],
+        "n01 with an entity-specific action and no digitalSourceType. The history is complete, but what that action did is unknown.")?;
     g.sign(Unknown, "u13_empty_with_unknown_component.jpg", &g.src("photo-unsigned.jpg"),
         actions(vec![empty_created(), placed("photo", editor())], true),
         &[component("photo", &unsigned_photo)],

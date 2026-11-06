@@ -5,13 +5,16 @@ generative AI in the current content?**
 
 | Folder | The provenance declares… |
 |---|---|
-| [`files/ai/`](files/ai) | the whole current content was made by generative AI, with a complete history. |
-| [`files/includes-ai/`](files/includes-ai) | generative AI made some of the current content, or made it with a history that may be incomplete. |
+| [`files/ai/`](files/ai) | the whole current content was made by generative AI, with a complete history and no later change that may have added other content. |
+| [`files/includes-ai/`](files/includes-ai) | generative AI is in the provenance of the current content and its removal hasn't been established. The rest may not be AI, or the history may be incomplete. |
 | [`files/no-ai/`](files/no-ai) | a complete history with no generative AI in the current content. |
 | [`files/unknown/`](files/unknown) | not enough to settle it either way. |
 
 These four categories are an application policy, not something the C2PA specification
-prescribes. The labels describe what each file's manifests *declare*. All media is procedural:
+prescribes. Provenance records what was done, not what is left: a crop or an unrecorded change
+could remove AI content without saying so. So **includes-ai** means AI is in the relevant
+provenance and nothing establishes its removal. Only an explicit `c2pa.deleted` of the AI
+ingredient does (n07, n09). The labels describe what each file's manifests *declare*. All media is procedural:
 each file has the pixels its history describes (a crop is cropped, a fill is filled), but none
 is a real camera capture or model output. "AI" in a description means a simulated AI-origin
 scenario.
@@ -41,6 +44,8 @@ classifier gives are in [`labels.json`](labels.json).
 | `a09_ai_disclosure_prompt_guided.jpg` | Same with `prompt_guided`. |
 | `a10_ai_disclosure_human_validated.jpg` | Same with `human_validated`: human approval doesn't make the content partly human-made. |
 | `a11_empty_with_ai_component.jpg` | Blank canvas (`empty`) whose only content is a01. |
+| `a12_ai_then_generative_inpaint.jpg` | a01 with a region inpainted: `compositeWithTrainedAlgorithmicMedia` is generative augmentation, so the content stays AI. |
+| `a13_text_to_image_with_reference_input.jpg` | Text-to-image with an unsigned reference image as an `inputTo` ingredient. An input to the model isn't placed content, so its unknown provenance doesn't count. |
 | **includes-ai** | |
 | `i01_generative_fill.jpg` | Camera photo (n01) with a region filled; `c2pa.edited` with `compositeWithTrainedAlgorithmicMedia`. |
 | `i02_ai_element_placed.jpg` | a01 `c2pa.placed` into n01. No action has an AI source type; the AI is only in the `componentOf` ingredient. |
@@ -54,9 +59,12 @@ classifier gives are in [`labels.json`](labels.json).
 | `i10_ai_origin_incomplete_history.jpg` | `trainedAlgorithmicMedia` with `allActionsIncluded: false`. AI is present, but unrecorded changes may have added other content. |
 | `i11_ai_origin_unknown_component.jpg` | a01 with a component of unknown provenance placed into it. |
 | `i12_empty_with_mixed_components.jpg` | Blank canvas with a01 and n01 placed on it. |
+| `i13_ai_with_hand_drawn_annotation.jpg` | a01 with a `c2pa.drawing` (`humanEdits`): human content added without an ingredient. |
+| `i14_ai_then_composite_synthetic_edit.jpg` | a01 edited as `compositeSynthetic`, which declares a mix with other elements. |
+| `i15_mixed_cropped_away_from_ai.jpg` | i02 cropped so the placed AI element is out of frame. A crop doesn't say what it removed, so the label stays includes-ai. |
 | **no-ai** | |
 | `n01_camera_capture.jpg` | `digitalCapture`. |
-| `n02_capture_cropped_and_adjusted.jpg` | n01 cropped and colour-adjusted. |
+| `n02_capture_cropped_and_adjusted.jpg` | n01 cropped and colour-adjusted (`c2pa.adjustedColor`; `c2pa.color_adjustments` is deprecated). |
 | `n03_digital_illustration.png` | `digitalCreation`: made with non-generative tools. |
 | `n04_hdr_computational_capture.jpg` | In-camera HDR: `computationalCapture`, where IPTC puts automatic multi-frame HDR (non-generative AI at most). |
 | `n05_field_recording.wav` | Audio `digitalCapture`. |
@@ -64,6 +72,7 @@ classifier gives are in [`labels.json`](labels.json).
 | `n07_ai_component_deleted.jpg` | i02 with its AI component removed, recorded by `c2pa.deleted` referencing that `componentOf` ingredient. AI is in the history, not in the current content. |
 | `n08_composite_of_captures.jpg` | A collage of two photographs: `compositeCapture`. |
 | `n09_ai_component_deleted_via_template_parameters.jpg` | As n07, but the deletion's reference comes from a template's deprecated `templateParameters`, which consumers must still merge. |
+| `n10_computational_capture_with_model_disclosure.jpg` | `computationalCapture` with a `c2pa.ai-disclosure` naming a scikit-learn model: non-generative AI that the source type already declares. |
 | **unknown** | |
 | `u01_no_manifest.jpg` | No manifest. |
 | `u02_ai_with_manifest_stripped.jpg` | Represents an AI-origin asset whose manifest was lost (a01 re-encoded). |
@@ -77,6 +86,8 @@ classifier gives are in [`labels.json`](labels.json).
 | `u11_screen_capture.png` | `screenCapture` says how a screen was captured, not where the displayed content came from. |
 | `u12_virtual_recording.jpg` | `virtualRecording` may be "based on Generative AI and/or captured elements". |
 | `u13_empty_with_unknown_component.jpg` | Blank canvas whose only content has no manifest or declared source type. |
+| `u14_capture_with_model_disclosure.jpg` | `digitalCapture` with a `c2pa.ai-disclosure`, but no source type declares AI use: a model was used in some undeclared way. |
+| `u15_capture_then_custom_action.jpg` | n01 with an entity-specific action and no source type. The history is complete, but what that action did is unknown. |
 
 ## The policy
 
@@ -99,18 +110,35 @@ walks the ingredient history:
      none, its origin is unknown.
    - An ingredient that fails validation is unknown.
 5. **Components.** `componentOf` ingredients are classified the same way. Any that a later
-   `c2pa.deleted` action references are no longer part of the current content.
-6. **Combining:**
+   `c2pa.deleted` action references are no longer part of the current content. `inputTo`
+   ingredients (inputs to a model, such as prompts or reference images) aren't content and
+   don't count.
+6. **Later actions.** Each action from the specification's list is either one that preserves
+   content or one that may add it:
+   - Preserving: cropping, resizing, colour and orientation changes, filters, enhancement,
+     transcoding, deletion, publishing and similar.
+   - May add: drawing, added text, placing, dubbing, translation, and the generic
+     `c2pa.edited` and `c2pa.modified`.
+
+   An adding action keeps an AI origin entirely AI only if its source type is generative
+   (`trainedAlgorithmicMedia` or `compositeWithTrainedAlgorithmicMedia`). Otherwise, or with
+   `compositeSynthetic`, the content may now be mixed. An action that isn't in the
+   specification's list (entity-specific) or is `c2pa.unknown`, and has no source type, makes
+   the result unclear: a complete history says what was recorded, not that the classifier
+   understands it.
+7. **AI disclosure.** `c2pa.ai-disclosure` names AI/ML models but doesn't say they generated
+   content, so on its own it doesn't count as generative AI. With a source type that already
+   declares AI use (including `computationalCapture`), it changes nothing. Without one, it makes
+   the result unclear.
+8. **Combining:**
    - **ai** if every input is AI (an AI origin, or an `empty` origin with components) and every
-     remaining component is AI. The history must also be complete (`allActionsIncluded: true`)
-     with no unclear source type, since an unrecorded or unclear change could have added
-     non-AI content.
-   - **includes-ai** if any generative AI is declared anywhere in the current content:
+     remaining component is AI. The history must also be complete (`allActionsIncluded: true`),
+     with nothing unclear and no later action that may have added other content.
+   - **includes-ai** if any generative AI is declared in the provenance of the current content:
      - an AI origin that fails the "entirely AI" test above;
      - `compositeWithTrainedAlgorithmicMedia` or `compositeSynthetic`;
      - an AI source type on any action;
-     - an AI component;
-     - a `c2pa.ai-disclosure` assertion.
+     - an AI component.
    - **unknown** if the origin, any component or any source type is unclear, or the history may
      be incomplete. Only a v2 actions assertion with `allActionsIncluded: true` rules out
      unrecorded actions; v1 actions and an omitted field don't.
@@ -128,13 +156,15 @@ walks the ingredient history:
 | Edits only | `humanEdits` and the retired `minorHumanEdits` describe edits, not an origin, so they are neutral on an edit and unclear as an origin. |
 | Unclear | everything else, including `algorithmicallyEnhanced`, `screenCapture`, `virtualRecording` and unrecognised URIs |
 
-The labels answer "is generative AI present in the current content". A consumer asking "was it
-*ever* involved" would answer n07 and n09 differently; their `classifierReason` shows the AI
-in the history.
+The labels answer "is generative AI in the provenance of the current content, with no
+established removal". A consumer asking "was it *ever* involved" would answer n07 and n09
+differently; their `classifierReason` shows the AI in the history.
 
 The classifier ignores `signingCredential.untrusted`. See trust below. Cases c2pa-rs can't
 build as files, such as published-only and metadata-only update manifests (its Builder always
-records `c2pa.opened`), are covered by unit tests in `src/classify.rs`.
+records `c2pa.opened`), are covered by unit tests in `src/classify.rs`. So are an older v2
+assertion that omits `allActionsIncluded` (read as possibly incomplete), and full template
+precedence (`*`, then the named template, then the action).
 
 ## Schema checks
 
