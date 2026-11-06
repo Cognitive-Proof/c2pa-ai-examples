@@ -131,9 +131,13 @@ non-conformant file:
 
 | Issue | Effect here |
 |---|---|
-| c2pa-rs checks `c2pa.created` for a `digitalSourceType` before applying action templates, so a template-supplied source type is reported as `assertion.action.malformed`. | a07 is signed without verify-after-sign. `labels.json` records the SDK's verdict under `knownSdkIssue`, and the check confirms the label once that code is set aside. |
-| `Builder` writes every actions assertion as `c2pa.actions.v2`, even in a v1 claim, keeping a v1-style string `softwareAgent`. | u03 is a genuine 1.x fixture instead. |
-| With `BuilderIntent::Update`, `Builder` inserts its own `c2pa.opened` in an actions assertion without `allActionsIncluded`. An update manifest with no actions can't be produced. | a06 records `c2pa.opened` with `allActionsIncluded: true` itself. |
+| c2pa-rs checks `c2pa.created` for a `digitalSourceType` before applying action templates, so a template-supplied source type is reported as `assertion.action.malformed`. Fix: [contentauth/c2pa-rs#3034](https://github.com/contentauth/c2pa-rs/pull/3034). | a07 is signed without verify-after-sign. `labels.json` records the SDK's verdict under `knownSdkIssue`, and the check confirms the label once that code is set aside. |
+| `Builder` writes every actions assertion as `c2pa.actions.v2` (legal in a v1 claim), but keeps a string `softwareAgent`, which v2 doesn't allow. Fix: [contentauth/c2pa-rs#3035](https://github.com/contentauth/c2pa-rs/pull/3035). It also can't write a v1 `c2pa.actions` assertion. | u03 is a genuine 1.x fixture instead. |
+| `Reader::json()` reports a v1 `c2pa.actions` assertion as `c2pa.actions.v2`. | The lint reads `Reader::detailed_json()`. |
+
+With `BuilderIntent::Update`, c2pa-rs always records `c2pa.opened`, so an update manifest with no
+actions can't be produced. The generator turns on `builder.actions.auto_all_actions_included`, so
+that `c2pa.opened` (a06) carries `allActionsIncluded: true`.
 
 ## Trust
 

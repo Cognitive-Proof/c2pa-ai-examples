@@ -193,6 +193,8 @@ fn settings(root: &Path, verify_after_sign: bool) -> Result<Settings> {
     for auto in ["auto_created_action", "auto_opened_action", "auto_placed_action"] {
         s["builder"]["actions"][auto]["enabled"] = json!(false);
     }
+    // Mark a manifest whose only action is c2pa.opened as allActionsIncluded: true.
+    s["builder"]["actions"]["auto_all_actions_included"] = json!(true);
     s["builder"]["claim_generator_info"] = json!({ "name": GENERATOR, "version": env!("CARGO_PKG_VERSION") });
     // Keep the check offline and deterministic: u06's remote manifest is never published.
     s["verify"]["remote_manifest_fetch"] = json!(false);
@@ -325,12 +327,11 @@ fn main() -> Result<()> {
         actions(vec![created("trainedAlgorithmicMedia", agent("Fabrikam Voice", "3.0"), "Synthesised speech")], true), &[],
         "Simulated synthetic speech in WAV.")?;
 
-    // c2pa-rs always writes c2pa.opened into an update manifest, and its own inserted actions
-    // assertion has no allActionsIncluded, so this one records the opened action itself.
-    g.sign_with(Ai, "a06_update_manifest_over_ai.jpg", &a01, &[parent(&a01)],
+    // c2pa-rs records the update manifest's c2pa.opened itself; auto_all_actions_included
+    // (see settings) marks it allActionsIncluded: true, as the spec requires.
+    g.sign_with(Ai, "a06_update_manifest_over_ai.jpg", &a01, &[],
         "Update manifest over a01 adding a review assertion; its only action is c2pa.opened, so the AI origin is inherited from the parent.", |b| {
             b.set_intent(BuilderIntent::Update);
-            b.add_assertion("c2pa.actions.v2", &actions(vec![opened()], true))?;
             b.add_assertion("com.northwindtraders.review", &json!({ "status": "approved" }))?;
             Ok(())
         })?;
