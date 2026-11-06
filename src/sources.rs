@@ -87,6 +87,32 @@ pub fn fractal() -> RgbImage {
     })
 }
 
+/// Window chrome, a sidebar and text-like bars: stands in for a screenshot.
+pub fn screen() -> RgbImage {
+    RgbImage::from_fn(W, H, |x, y| {
+        if y < 28 {
+            Rgb([210, 210, 215])
+        } else if x < 150 {
+            Rgb([40, 44, 52])
+        } else if (y - 28) % 22 < 9 && x < 150 + ((y * 37) % 380) {
+            Rgb([90, 90, 100])
+        } else {
+            Rgb([250, 250, 252])
+        }
+    })
+}
+
+/// Centre crop to 75%, the operation the crop fixtures record.
+pub fn crop(img: &RgbImage) -> RgbImage {
+    let (w, h) = (img.width() * 3 / 4, img.height() * 3 / 4);
+    image::imageops::crop_imm(img, (img.width() - w) / 2, (img.height() - h) / 2, w, h).to_image()
+}
+
+/// Brightness and contrast change, the operation the colour-adjustment fixtures record.
+pub fn adjust(img: &RgbImage) -> RgbImage {
+    image::imageops::contrast(&image::imageops::brighten(img, 12), 15.0)
+}
+
 /// Copies `patch` into `base` at (`x0`, `y0`), blending the edge so the seam is soft.
 pub fn paste(base: &mut RgbImage, patch: &RgbImage, x0: u32, y0: u32, w: u32, h: u32) {
     for y in 0..h {
