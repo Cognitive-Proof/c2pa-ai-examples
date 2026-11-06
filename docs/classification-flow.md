@@ -5,6 +5,13 @@ the signed provenance declare about **generative** AI in the current content? Th
 the code. [The step-by-step guide](step-by-step-guide.md) explains it in plain language, and
 [the policy](../README.md#the-policy) in the README gives the reasons.
 
+The same charts as standalone SVG files, for slides or documents:
+[1. The verdict](flowcharts/1-verdict.svg) ·
+[2. Origin and ingredients](flowcharts/2-origin-and-ingredients.svg) ·
+[3. Later actions](flowcharts/3-later-actions.svg). They're rendered from the Mermaid below with
+`@mermaid-js/mermaid-cli` 10.9.1 (`htmlLabels: false`, white background), so the text is plain
+SVG that works in non-browser viewers.
+
 ## 1. The verdict
 
 ```mermaid
