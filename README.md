@@ -119,7 +119,8 @@ classifier gives are in [`labels.json`](labels.json).
 ## The policy
 
 The reference classifier ([`src/classify.rs`](src/classify.rs)) reads the manifest store and
-walks the ingredient history:
+walks the ingredient history. [`docs/classification-flow.md`](docs/classification-flow.md) shows
+the same logic as flowcharts.
 
 1. **Unreadable or failing.** No readable manifest, or a validation failure in the active
    manifest → **unknown**.
