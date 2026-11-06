@@ -9,14 +9,19 @@ mod lint;
 mod sources;
 
 use std::{
+    collections::HashMap,
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use anyhow::{Context as _, Result};
-use c2pa::{Builder, BuilderIntent, Context, Reader, Settings};
-use classify::{Verdict, IPTC};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use c2pa::{
+    assertions::{Action, ActionTemplate, Actions},
+    Builder, BuilderIntent, ClaimGeneratorInfo, Context, HashedUri, Reader, Settings,
+};
+use classify::{Store, Verdict, C2PA, IPTC};
 use serde_json::{json, Value};
 
 const GENERATOR: &str = "c2pa-ai-examples";
@@ -44,6 +49,11 @@ fn created(kind: &str, software: Value, description: &str) -> Value {
     })
 }
 
+/// `c2pa.created` from a blank canvas: the content comes from the placed components.
+fn empty_created() -> Value {
+    json!({ "action": "c2pa.created", "digitalSourceType": format!("{C2PA}empty"), "softwareAgent": agent("Northwind Layout", "5.1") })
+}
+
 fn opened() -> Value {
     json!({ "action": "c2pa.opened", "parameters": { "ingredientIds": ["parent"] } })
 }
@@ -61,6 +71,7 @@ fn disclosure(level: &str) -> Value {
         "modelType": "c2pa.types.model",
         "modelName": "Fabrikam Diffusion",
         "modelIdentifier": "pkg:generic/fabrikam/diffusion@4.2",
+        "scientificDomain": ["cs.CV"],
         "contentProfile": { "humanOversightLevel": level },
     })
 }
@@ -203,7 +214,10 @@ fn settings(root: &Path, verify_after_sign: bool) -> Result<Settings> {
 }
 
 /// The hashed URI of a `componentOf` ingredient assertion in the active manifest of `path`.
-fn component_ref(ctx: &Arc<Context>, path: &Path) -> Result<Value> {
+///
+/// `Reader` prints hashes as base64 text. Passing that text back through JSON would store its
+/// bytes, not the hash, so this decodes it into a typed `HashedUri`.
+fn component_ref(ctx: &Arc<Context>, path: &Path) -> Result<HashedUri> {
     let reader = Reader::from_shared_context(ctx).with_file(path)?;
     let manifest = reader.active_label().context("no active manifest")?.to_owned();
     let store: Value = serde_json::from_str(&reader.json())?;
@@ -228,15 +242,45 @@ fn component_ref(ctx: &Arc<Context>, path: &Path) -> Result<Value> {
     let detailed: Value = serde_json::from_str(&reader.detailed_json())?;
     let hash = find_hash(&detailed["manifests"][&manifest], &format!("c2pa.assertions/{ing}"))
         .context("ingredient hash not found")?;
-    Ok(json!({ "url": format!("self#jumbf=/c2pa/{manifest}/c2pa.assertions/{ing}"), "hash": hash }))
+    let hash = BASE64.decode(hash.as_str().context("hash is not text")?)?;
+    Ok(HashedUri::new(format!("self#jumbf=/c2pa/{manifest}/c2pa.assertions/{ing}"), None, &hash))
+}
+
+/// Opens the parent and deletes the component `target` from it, recording the reference either
+/// in the action's `parameters` or through a template's deprecated `templateParameters`.
+fn deleted_actions(target: HashedUri, via_template: bool) -> Result<Actions> {
+    let editor: ClaimGeneratorInfo = serde_json::from_value(agent("Northwind Photo Editor", "12.3"))?;
+    let mut deleted = Action::new("c2pa.deleted")
+        .set_software_agent(editor)
+        .set_description("Removed the placed AI element");
+    let mut templates = None;
+    if via_template {
+        let mut template = ActionTemplate::new("c2pa.deleted");
+        let ingredients = c2pa_cbor::value::to_value(vec![target])?;
+        template.template_parameters = Some(HashMap::from([("ingredients".to_owned(), ingredients)]));
+        templates = Some(vec![template]);
+    } else {
+        deleted = deleted.set_parameter("ingredients", vec![target])?;
+    }
+    let mut actions = Actions::new()
+        .add_action(Action::new("c2pa.opened").set_parameter("ingredientIds", vec!["parent"])?)
+        .add_action(deleted);
+    actions.templates = templates;
+    actions.all_actions_included = Some(true);
+    Ok(actions)
+}
+
+/// The `Reader::json()` and `Reader::detailed_json()` values the classifier and lint read.
+fn views(r: &Reader) -> Result<(Value, Value)> {
+    Ok((serde_json::from_str(&r.json())?, serde_json::from_str(&r.detailed_json())?))
 }
 
 /// `cargo run --release -- FILE...` lints and classifies existing files instead of generating.
 fn inspect(ctx: &Arc<Context>, paths: &[String]) -> Result<()> {
     for path in paths {
         let reader = Reader::from_shared_context(ctx).with_file(path);
-        let store = reader.as_ref().ok().and_then(|r| serde_json::from_str::<Value>(&r.json()).ok());
-        let (verdict, why) = classify::classify(store.as_ref());
+        let views = reader.as_ref().ok().map(views).transpose()?;
+        let (verdict, why) = classify::classify(views.as_ref().map(|(j, d)| Store { json: j, detailed: d }));
         println!("{:<12} {path}\n             {why}", verdict.dir());
         if let Ok(r) = &reader {
             for msg in lint::lint(&serde_json::from_str(&r.detailed_json())?) {
@@ -289,6 +333,13 @@ fn main() -> Result<()> {
     let mut with_photo = dream.clone();
     sources::paste(&mut with_photo, &photo, 360, 260, 240, 180);
     with_photo.save(g.src("dream-with-photo.jpg"))?;
+    sources::adjust(&dream).save(g.src("dream-adjusted.jpg"))?;
+    let mut with_unsigned = dream.clone();
+    sources::paste(&mut with_unsigned, &sources::photo(3), 360, 260, 240, 180);
+    with_unsigned.save(g.src("dream-with-unsigned.jpg"))?;
+    let mut photo_collage = photo.clone();
+    sources::paste(&mut photo_collage, &sources::photo(2), 320, 0, 320, 480);
+    photo_collage.save(g.src("photo-collage.jpg"))?;
     let mut collage = sources::illustration();
     sources::paste(&mut collage, &sources::dream(3.0), 300, 40, 300, 160);
     collage.save(g.src("collage.jpg"))?;
@@ -365,6 +416,17 @@ fn main() -> Result<()> {
             Ok(())
         })?;
 
+    g.sign_with(Ai, "a10_ai_disclosure_human_validated.jpg", &g.src("dream.jpg"), &[],
+        "trainedAlgorithmicMedia plus c2pa.ai-disclosure with human_validated: human approval doesn't make the content partly human-made.", |b| {
+            b.add_assertion("c2pa.actions.v2", &actions(vec![created("trainedAlgorithmicMedia", model(), "Generated, then approved by an editor")], true))?;
+            b.add_assertion("c2pa.ai-disclosure", &disclosure("human_validated"))?;
+            Ok(())
+        })?;
+    g.sign(Ai, "a11_empty_with_ai_component.jpg", &g.src("dream.jpg"),
+        actions(vec![empty_created(), placed("ai-element", editor())], true),
+        &[component("ai-element", &a01)],
+        "Blank canvas (empty) whose only content is a01.")?;
+
     // ---- no-ai: the declared, complete history has no trained model in the current content -
     let n01 = g.sign(NoAi, "n01_camera_capture.jpg", &g.src("photo.jpg"),
         actions(vec![created("digitalCapture", camera(), "Captured by camera")], true), &[],
@@ -376,9 +438,12 @@ fn main() -> Result<()> {
     g.sign(NoAi, "n03_digital_illustration.png", &g.src("illustration.png"),
         actions(vec![created("digitalCreation", agent("Northwind Paint", "8.0"), "Drawn by hand")], true), &[],
         "Simulated hand-made illustration: digitalCreation.")?;
-    g.sign(NoAi, "n04_hdr_composite_capture.jpg", &g.src("photo-hdr.jpg"),
-        actions(vec![created("compositeCapture", camera(), "HDR merge of bracketed exposures")], true), &[],
-        "Simulated HDR merge: compositeCapture.")?;
+    g.sign(NoAi, "n04_hdr_computational_capture.jpg", &g.src("photo-hdr.jpg"),
+        actions(vec![created("computationalCapture", camera(), "Automatic HDR merge of bracketed frames")], true), &[],
+        "Simulated in-camera HDR: computationalCapture, which IPTC defines as frames merged by signal processing and/or non-generative AI.")?;
+    g.sign(NoAi, "n08_composite_of_captures.jpg", &g.src("photo-collage.jpg"),
+        actions(vec![created("compositeCapture", editor(), "Collage of two photographs")], true), &[],
+        "Simulated collage of real-life captures: compositeCapture.")?;
     g.sign(NoAi, "n05_field_recording.wav", &g.src("field.wav"),
         actions(vec![created("digitalCapture", agent("Northwind Recorder", "1.4"), "Recorded on location")], true), &[],
         "Simulated audio capture: digitalCapture.")?;
@@ -428,16 +493,47 @@ fn main() -> Result<()> {
             Ok(())
         })?;
 
-    let deleted = component_ref(&g.ctx, &i02)?;
-    g.sign(NoAi, "n07_ai_component_deleted.jpg", &g.src("photo.jpg"),
+    g.sign(IncludesAi, "i08_composite_synthetic.jpg", &g.src("collage.jpg"),
+        actions(vec![created("compositeSynthetic", agent("Northwind Layout", "5.1"), "Layout with synthetic elements")], true), &[],
+        "compositeSynthetic: IPTC defines it as a composite of several elements, at least one of which is generative AI.")?;
+    g.sign(IncludesAi, "i09_generative_edit_in_related_action.jpg", &g.src("photo-filled.jpg"),
         actions(vec![opened(), json!({
-            "action": "c2pa.deleted",
+            "action": "c2pa.edited",
             "softwareAgent": editor(),
-            "description": "Removed the placed AI element",
-            "parameters": { "ingredients": [deleted] },
+            "description": "Retouch",
+            "related": [{
+                "action": "c2pa.edited",
+                "digitalSourceType": dst("compositeWithTrainedAlgorithmicMedia"),
+                "softwareAgent": agent("Northwind Photo Editor Generative Fill", "12.3"),
+                "description": "Generative fill of a region",
+            }],
         })], true),
-        &[parent(&i02)],
-        "i02 with its AI component removed, recorded by c2pa.deleted. AI is in the history but not in the current content.")?;
+        &[parent(&n01)],
+        "n01 edited; the generative fill appears only in a related action, which consumers merge with its primary c2pa.edited.")?;
+    g.sign(IncludesAi, "i10_ai_origin_incomplete_history.jpg", &g.src("dream-adjusted.jpg"),
+        actions(vec![created("trainedAlgorithmicMedia", model(), "Generated from a text prompt")], false), &[],
+        "trainedAlgorithmicMedia with allActionsIncluded: false. AI is present, but unrecorded changes may have added other content, so it can't be called entirely AI.")?;
+    let unsigned_photo = g.src("photo-unsigned.jpg");
+    g.sign(IncludesAi, "i11_ai_origin_unknown_component.jpg", &g.src("dream-with-unsigned.jpg"),
+        actions(vec![opened(), placed("photo", editor())], true),
+        &[parent(&a01), component("photo", &unsigned_photo)],
+        "a01 with a component of unknown provenance placed into it: AI is present, the rest is unknown.")?;
+    g.sign(IncludesAi, "i12_empty_with_mixed_components.jpg", &g.src("dream-with-photo.jpg"),
+        actions(vec![empty_created(), placed("ai-element", editor()), placed("photo", editor())], true),
+        &[component("ai-element", &a01), component("photo", &n01)],
+        "Blank canvas (empty) with a01 and n01 placed on it.")?;
+
+    let target = component_ref(&g.ctx, &i02)?;
+    g.sign_with(NoAi, "n07_ai_component_deleted.jpg", &g.src("photo.jpg"), &[parent(&i02)],
+        "i02 with its AI component removed, recorded by c2pa.deleted. AI is in the history but not in the current content.", |b| {
+            b.add_assertion("c2pa.actions.v2", &deleted_actions(target.clone(), false)?)?;
+            Ok(())
+        })?;
+    g.sign_with(NoAi, "n09_ai_component_deleted_via_template_parameters.jpg", &g.src("photo.jpg"), &[parent(&i02)],
+        "As n07, but the deletion's ingredient reference comes from a template's deprecated templateParameters, which consumers must still merge.", |b| {
+            b.add_assertion("c2pa.actions.v2", &deleted_actions(target, true)?)?;
+            Ok(())
+        })?;
 
     // ---- unknown: the provenance cannot settle the question -------------------------------
     let u01 = g.out(Unknown, "u01_no_manifest.jpg");
@@ -475,9 +571,7 @@ fn main() -> Result<()> {
     fs::write(g.build.join("u06-not-published.c2pa"), manifest)?;
     g.label(&out, Unknown, "Points to a remote manifest (XMP dcterms:provenance) that was never published, and embeds none.");
 
-    g.sign(Unknown, "u07_composite_synthetic.jpg", &g.src("collage.jpg"),
-        actions(vec![created("compositeSynthetic", agent("Northwind Layout", "5.1"), "Layout with synthetic elements")], true), &[],
-        "compositeSynthetic says synthetic elements are present, not whether a trained model made them.")?;
+
     g.sign(Unknown, "u08_algorithmically_enhanced.jpg", &g.src("photo-enhanced.jpg"),
         actions(vec![opened(), json!({
             "action": "c2pa.edited",
@@ -500,6 +594,11 @@ fn main() -> Result<()> {
         actions(vec![created("virtualRecording", agent("Northwind Studio", "1.0"), "Recording of a virtual set")], true), &[],
         "virtualRecording allows synthetic, possibly generative, elements.")?;
 
+    g.sign(Unknown, "u13_empty_with_unknown_component.jpg", &g.src("photo-unsigned.jpg"),
+        actions(vec![empty_created(), placed("photo", editor())], true),
+        &[component("photo", &unsigned_photo)],
+        "Blank canvas (empty) whose only content has no manifest or declared source type.")?;
+
     check(&g, &root)
 }
 
@@ -510,29 +609,27 @@ fn check(g: &Gen, root: &Path) -> Result<()> {
     let mut problems = 0;
     for l in &g.labels {
         let reader = Reader::from_shared_context(&g.ctx).with_file(&l.path);
-        let store = reader.as_ref().ok().and_then(|r| serde_json::from_str::<Value>(&r.json()).ok());
+        let views = reader.as_ref().ok().map(views).transpose()?;
         let state = match &reader {
             Ok(r) => format!("{:?}", r.validation_state()),
             Err(e) => format!("unreadable: {e}"),
         };
         let rel = l.path.strip_prefix(root)?.to_string_lossy().into_owned();
-        let lint = match &reader {
-            Ok(r) => lint::lint(&serde_json::from_str(&r.detailed_json())?),
-            Err(_) => Vec::new(),
-        };
+        let lint = views.as_ref().map(|(_, d)| lint::lint(d)).unwrap_or_default();
         for msg in &lint {
             println!("LINT {rel}: {msg}");
         }
 
-        let (sdk_verdict, sdk_why) = classify::classify(store.as_ref());
+        let store = views.as_ref().map(|(j, d)| Store { json: j, detailed: d });
+        let (sdk_verdict, sdk_why) = classify::classify(store);
         // For a known SDK issue, the label must follow once that one code is set aside.
-        let (got, why, status) = match (l.known_sdk_issue, &store) {
-            (Some((code, _)), Some(s)) => {
-                let mut s = s.clone();
-                if let Some(f) = s["validation_results"]["activeManifest"]["failure"].as_array_mut() {
+        let (got, why, status) = match (l.known_sdk_issue, &views) {
+            (Some((code, _)), Some((j, d))) => {
+                let mut j = j.clone();
+                if let Some(f) = j["validation_results"]["activeManifest"]["failure"].as_array_mut() {
                     f.retain(|x| x["code"] != code);
                 }
-                let (v, why) = classify::classify(Some(&s));
+                let (v, why) = classify::classify(Some(Store { json: &j, detailed: d }));
                 (v, why, if v == l.expected && sdk_verdict != l.expected { "KNOWN" } else { "ok" })
             }
             _ => (sdk_verdict, sdk_why.clone(), "ok"),

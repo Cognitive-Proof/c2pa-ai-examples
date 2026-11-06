@@ -1,8 +1,12 @@
-//! Reference classifier: reads a C2PA manifest store (as `Reader::json()` output) and answers
-//! "does the signed provenance declare AI in the current content?" with one of four verdicts.
+//! Reference classifier: reads a C2PA manifest store (as `Reader::json()` output, plus
+//! `Reader::detailed_json()` to tell update manifests apart) and answers "does the signed
+//! provenance declare generative AI in the current content?" with one of four verdicts.
 //!
 //! The four categories are an application policy, not an algorithm the C2PA specification
-//! prescribes. The policy is documented in the README; this file is its executable form.
+//! prescribes. The policy is documented in the README; this file is its executable form. It
+//! concerns *generative* AI, following the IPTC split between generative and non-generative
+//! tools: `computationalCapture` ("non-generative AI") and `digitalCreation` ("non-generative
+//! tools") count as no generative AI.
 //!
 //! Signing-credential trust is deliberately ignored here: every file in this set is signed
 //! with a public test certificate, so trust is a property of the reader's trust list, not of
@@ -40,7 +44,8 @@ impl fmt::Display for Verdict {
 pub const IPTC: &str = "http://cv.iptc.org/newscodes/digitalsourcetype/";
 pub const C2PA: &str = "http://c2pa.org/digitalsourcetype/";
 
-/// IPTC terms as of the 2025 vocabulary, plus the two C2PA-specific values.
+/// IPTC terms as of the 2025 vocabulary (including the retired `minorHumanEdits`), plus the two
+/// C2PA-specific values.
 pub fn is_known_source_type(uri: &str) -> bool {
     const IPTC_TERMS: &[&str] = &[
         "digitalCapture", "computationalCapture", "negativeFilm", "positiveFilm", "print",
@@ -66,7 +71,7 @@ enum Source {
     Empty,
     /// Edits made by people with non-generative tools; says nothing about the origin.
     HumanEdits,
-    /// Neither confirms nor rules out a trained model, or is not a recognised term.
+    /// Neither confirms nor rules out generative AI, or is not a recognised term.
     Unclear,
 }
 
@@ -79,12 +84,15 @@ fn source_of(uri: &str) -> Source {
     }
     match uri.strip_prefix(IPTC) {
         Some("trainedAlgorithmicMedia") => Source::Ai,
-        Some("compositeWithTrainedAlgorithmicMedia") => Source::IncludesAi,
-        Some("digitalCapture" | "negativeFilm" | "positiveFilm" | "print" | "digitalCreation"
-            | "compositeCapture" | "algorithmicMedia") => Source::NoAi,
+        // compositeSynthetic: "at least one of which is Generative AI".
+        Some("compositeWithTrainedAlgorithmicMedia" | "compositeSynthetic") => Source::IncludesAi,
+        // computationalCapture merges frames with "non-generative AI" at most.
+        Some("digitalCapture" | "computationalCapture" | "negativeFilm" | "positiveFilm"
+            | "print" | "digitalCreation" | "compositeCapture" | "algorithmicMedia") => Source::NoAi,
         Some("humanEdits" | "minorHumanEdits") => Source::HumanEdits,
         // screenCapture says how a screen was captured, not where its content came from;
-        // virtualRecording explicitly allows synthetic elements.
+        // virtualRecording may be "based on Generative AI and/or captured elements";
+        // algorithmicallyEnhanced doesn't say whether the algorithm is generative.
         _ => Source::Unclear,
     }
 }
@@ -116,39 +124,53 @@ pub fn actions_assertions(m: &Value) -> Vec<(&str, &Value)> {
         .collect()
 }
 
-/// Every action with its templates applied: the `*` template first, then same-named
-/// templates in order, then the action's own fields; `parameters` merge key by key.
+/// Overlays `layer` onto `out`. `parameters` merge key by key; in a template, the deprecated
+/// `templateParameters` is treated as `parameters`.
+fn overlay(out: &mut Map<String, Value>, layer: &Value, template: bool) {
+    for (k, v) in layer.as_object().into_iter().flatten() {
+        let key = if template && k == "templateParameters" { "parameters" } else { k.as_str() };
+        match (key, out.get_mut(key)) {
+            ("parameters", Some(Value::Object(p))) => {
+                p.extend(v.as_object().into_iter().flatten().map(|(k, v)| (k.clone(), v.clone())));
+            }
+            _ => {
+                out.insert(key.to_owned(), v.clone());
+            }
+        }
+    }
+}
+
+/// `action` followed by each of its `related` actions merged onto it, recursively.
+fn with_related(action: Map<String, Value>, out: &mut Vec<Value>) {
+    let mut primary = action;
+    let related = primary.remove("related");
+    out.push(Value::Object(primary.clone()));
+    for r in related.as_ref().and_then(Value::as_array).into_iter().flatten() {
+        let mut merged = primary.clone();
+        overlay(&mut merged, r, false);
+        with_related(merged, out);
+    }
+}
+
+/// Every action as a consumer must see it: the `*` template first, then same-named templates
+/// in order, then the action's own fields; then each `related` action merged onto its primary.
 pub fn merged_actions(data: &Value) -> Vec<Value> {
     let templates: Vec<&Value> = data["templates"].as_array().into_iter().flatten().collect();
-    data["actions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|action| {
-            let name = &action["action"];
-            let mut out = Map::new();
-            let layers = templates
-                .iter()
-                .filter(|t| t["action"] == "*")
-                .chain(templates.iter().filter(|t| &t["action"] == name))
-                .copied()
-                .chain(std::iter::once(action));
-            for layer in layers {
-                for (k, v) in layer.as_object().into_iter().flatten() {
-                    match (k.as_str(), out.get_mut(k)) {
-                        ("parameters", Some(Value::Object(p))) => {
-                            p.extend(v.as_object().into_iter().flatten().map(|(k, v)| (k.clone(), v.clone())));
-                        }
-                        _ => {
-                            out.insert(k.clone(), v.clone());
-                        }
-                    }
-                }
-            }
-            out.insert("action".into(), name.clone());
-            Value::Object(out)
-        })
-        .collect()
+    let mut out = Vec::new();
+    for action in data["actions"].as_array().into_iter().flatten() {
+        let name = &action["action"];
+        let mut merged = Map::new();
+        for t in templates.iter().filter(|t| t["action"] == "*") {
+            overlay(&mut merged, t, true);
+        }
+        for t in templates.iter().filter(|t| &t["action"] == name) {
+            overlay(&mut merged, t, true);
+        }
+        overlay(&mut merged, action, false);
+        merged.insert("action".into(), name.clone());
+        with_related(merged, &mut out);
+    }
+    out
 }
 
 /// (manifest label, ingredient assertion label) of a hashed JUMBF URI.
@@ -158,22 +180,39 @@ fn target(url: &str) -> Option<(String, String)> {
     Some((manifest.to_owned(), assertion.to_owned()))
 }
 
+/// The `Reader::json()` and `Reader::detailed_json()` views of one manifest store.
+#[derive(Clone, Copy)]
+pub struct Store<'a> {
+    pub json: &'a Value,
+    pub detailed: &'a Value,
+}
+
+impl Store<'_> {
+    /// An update manifest has no hard-binding (`c2pa.hash.*`) assertion.
+    fn is_update(&self, label: &str) -> bool {
+        self.detailed["manifests"][label]["assertion_store"]
+            .as_object()
+            .is_some_and(|a| !a.keys().any(|k| k.starts_with("c2pa.hash.")))
+    }
+}
+
 /// Classifies a manifest store. `None` means no manifest could be read.
-pub fn classify(store: Option<&Value>) -> (Verdict, String) {
+pub fn classify(store: Option<Store>) -> (Verdict, String) {
     let Some(store) = store else {
         return (Verdict::Unknown, "no readable C2PA manifest".into());
     };
-    let bad = failures(&store["validation_results"]);
+    let json = store.json;
+    let bad = failures(&json["validation_results"]);
     if !bad.is_empty() {
         return (Verdict::Unknown, format!("active manifest failed validation: {}", bad.join(", ")));
     }
-    match store["active_manifest"].as_str() {
+    match json["active_manifest"].as_str() {
         Some(label) => manifest(store, label, &HashSet::new()),
         None => (Verdict::Unknown, "no active manifest".into()),
     }
 }
 
-fn ingredient(store: &Value, ing: &Value, deleted: &HashSet<(String, String)>) -> (Verdict, String) {
+fn ingredient(store: Store, ing: &Value, deleted: &HashSet<(String, String)>) -> (Verdict, String) {
     let title = ing["title"].as_str().unwrap_or("untitled ingredient");
     let bad = failures(&ing["validation_results"]);
     if !bad.is_empty() {
@@ -198,8 +237,23 @@ fn ingredient(store: &Value, ing: &Value, deleted: &HashSet<(String, String)>) -
     }
 }
 
-fn manifest(store: &Value, label: &str, deleted: &HashSet<(String, String)>) -> (Verdict, String) {
-    let m = &store["manifests"][label];
+fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (Verdict, String) {
+    let m = &store.json["manifests"][label];
+    let ingredients: Vec<&Value> = m["ingredients"].as_array().into_iter().flatten().collect();
+    let parent = ingredients.iter().find(|i| i["relationship"] == "parentOf");
+
+    // An update manifest can't change the content, whatever actions it records (opened,
+    // published, edited.metadata, redacted), so the content's provenance is the parent's.
+    if store.is_update(label) {
+        return match parent {
+            Some(p) => {
+                let (v, why) = ingredient(store, p, deleted);
+                (v, format!("update manifest over {why}"))
+            }
+            None => (Verdict::Unknown, "update manifest with no parent ingredient".into()),
+        };
+    }
+
     let assertions = actions_assertions(m);
     let actions: Vec<Value> = assertions.iter().flat_map(|(_, d)| merged_actions(d)).collect();
     // Only a v2 assertion saying allActionsIncluded: true rules out unrecorded actions.
@@ -214,8 +268,6 @@ fn manifest(store: &Value, label: &str, deleted: &HashSet<(String, String)>) -> 
         }
     }
 
-    let ingredients: Vec<&Value> = m["ingredients"].as_array().into_iter().flatten().collect();
-    let parent = ingredients.iter().find(|i| i["relationship"] == "parentOf");
     let components: Vec<(Verdict, String)> = ingredients
         .iter()
         .filter(|i| i["relationship"] == "componentOf")
@@ -275,11 +327,6 @@ fn manifest(store: &Value, label: &str, deleted: &HashSet<(String, String)>) -> 
 
     let origin = match origin {
         Some(v) => v,
-        // An update manifest need not record an opened action; it inherits its parent.
-        None if parent.is_some() && actions.is_empty() => {
-            let (v, why) = ingredient(store, parent.unwrap(), &deleted);
-            return (v, format!("update manifest over {why}"));
-        }
         None => {
             notes.push("no created or opened action".into());
             Verdict::Unknown
@@ -302,12 +349,14 @@ fn manifest(store: &Value, label: &str, deleted: &HashSet<(String, String)>) -> 
         notes.push("history may be incomplete (allActionsIncluded not true)".into());
     }
 
-    let all_components_ai = !components.is_empty() && components.iter().all(|(v, _)| *v == Verdict::Ai);
-    let verdict = if (origin == Verdict::Ai && components.iter().all(|(v, _)| *v == Verdict::Ai))
-        || (empty_origin && all_components_ai)
-    {
+    let components_all_ai = components.iter().all(|(v, _)| *v == Verdict::Ai);
+    let all_ai_inputs = components_all_ai
+        && (origin == Verdict::Ai || (empty_origin && !components.is_empty()));
+    // "Entirely AI" needs the whole history: an unrecorded or unclear later change could have
+    // added content that isn't AI. Without it, AI is still known to be present.
+    let verdict = if all_ai_inputs && complete && !unclear {
         Verdict::Ai
-    } else if origin == Verdict::Ai || origin == Verdict::IncludesAi || ai_signal {
+    } else if all_ai_inputs || origin == Verdict::Ai || origin == Verdict::IncludesAi || ai_signal {
         Verdict::IncludesAi
     } else if origin == Verdict::Unknown || unclear || !complete {
         Verdict::Unknown
@@ -315,4 +364,106 @@ fn manifest(store: &Value, label: &str, deleted: &HashSet<(String, String)>) -> 
         Verdict::NoAi
     };
     (verdict, notes.join("; "))
+}
+
+/// Cases c2pa-rs can't build as files: its Builder always records `c2pa.opened` in an update
+/// manifest. The stores here carry only the fields the classifier reads.
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    const AI: &str = "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia";
+    const CAPTURE: &str = "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture";
+    const FILL: &str = "http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia";
+
+    /// (label, actions, ingredients, is an update manifest)
+    type Manifest = (&'static str, Value, Value, bool);
+
+    fn classify_store(manifests: &[Manifest]) -> Verdict {
+        let mut json = json!({ "active_manifest": manifests[0].0, "manifests": {} });
+        let mut detailed = json!({ "manifests": {} });
+        for (label, actions, ingredients, update) in manifests {
+            json["manifests"][label] = json!({
+                "assertions": [{ "label": "c2pa.actions.v2", "data": actions }],
+                "ingredients": ingredients,
+            });
+            let mut store = json!({ "c2pa.actions.v2": actions });
+            if !update {
+                store["c2pa.hash.data"] = json!({});
+            }
+            detailed["manifests"][label] = json!({ "assertion_store": store });
+        }
+        classify(Some(Store { json: &json, detailed: &detailed })).0
+    }
+
+    fn ai_parent() -> Manifest {
+        let actions = json!({ "actions": [{ "action": "c2pa.created", "digitalSourceType": AI }], "allActionsIncluded": true });
+        ("parent", actions, json!([]), false)
+    }
+
+    fn update_over_parent(action: &str) -> Manifest {
+        let actions = json!({ "actions": [{ "action": action }] });
+        let parent = json!([{ "relationship": "parentOf", "active_manifest": "parent", "title": "parent" }]);
+        ("update", actions, parent, true)
+    }
+
+    #[test]
+    fn published_only_update_manifest_inherits_parent() {
+        assert_eq!(classify_store(&[update_over_parent("c2pa.published"), ai_parent()]), Verdict::Ai);
+    }
+
+    #[test]
+    fn metadata_only_update_manifest_inherits_parent() {
+        assert_eq!(classify_store(&[update_over_parent("c2pa.edited.metadata"), ai_parent()]), Verdict::Ai);
+    }
+
+    #[test]
+    fn standard_manifest_without_inception_action_is_unknown() {
+        let (label, actions, ingredients, _) = update_over_parent("c2pa.published");
+        assert_eq!(classify_store(&[(label, actions, ingredients, false), ai_parent()]), Verdict::Unknown);
+    }
+
+    #[test]
+    fn generative_edit_in_nested_related_action() {
+        let actions = json!({
+            "actions": [
+                { "action": "c2pa.created", "digitalSourceType": CAPTURE },
+                { "action": "c2pa.edited", "related": [
+                    { "action": "c2pa.color_adjustments", "related": [
+                        { "action": "c2pa.edited", "digitalSourceType": FILL },
+                    ] },
+                ] },
+            ],
+            "allActionsIncluded": true,
+        });
+        assert_eq!(classify_store(&[("m", actions, json!([]), false)]), Verdict::IncludesAi);
+    }
+
+    #[test]
+    fn related_action_inherits_primary_fields() {
+        // The related action only lists what differs, so it keeps the primary's source type.
+        let actions = json!({
+            "actions": [
+                { "action": "c2pa.created", "digitalSourceType": CAPTURE },
+                { "action": "c2pa.edited", "digitalSourceType": FILL, "related": [{ "action": "c2pa.edited", "description": "second pass" }] },
+            ],
+            "allActionsIncluded": true,
+        });
+        let merged = merged_actions(&actions);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[2]["digitalSourceType"], FILL);
+        assert!(merged[1].get("related").is_none());
+    }
+
+    #[test]
+    fn template_parameters_merge_into_parameters() {
+        let actions = json!({
+            "actions": [{ "action": "c2pa.deleted", "parameters": { "description": "own" } }],
+            "templates": [{ "action": "c2pa.deleted", "templateParameters": { "ingredients": [1], "description": "template" } }],
+        });
+        let merged = merged_actions(&actions);
+        assert_eq!(merged[0]["parameters"], json!({ "ingredients": [1], "description": "own" }));
+    }
 }

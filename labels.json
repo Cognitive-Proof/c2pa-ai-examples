@@ -39,7 +39,7 @@
     "expected": "ai",
     "description": "Update manifest over a01 adding a review assertion; its only action is c2pa.opened, so the AI origin is inherited from the parent.",
     "validationState": "Trusted",
-    "classifierReason": "opened parent: ingredient 'untitled ingredient' -> created as trainedAlgorithmicMedia"
+    "classifierReason": "update manifest over ingredient 'untitled ingredient' -> created as trainedAlgorithmicMedia"
   },
   {
     "file": "files/ai/a07_source_type_from_template.jpg",
@@ -68,6 +68,20 @@
     "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present"
   },
   {
+    "file": "files/ai/a10_ai_disclosure_human_validated.jpg",
+    "expected": "ai",
+    "description": "trainedAlgorithmicMedia plus c2pa.ai-disclosure with human_validated: human approval doesn't make the content partly human-made.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present"
+  },
+  {
+    "file": "files/ai/a11_empty_with_ai_component.jpg",
+    "expected": "ai",
+    "description": "Blank canvas (empty) whose only content is a01.",
+    "validationState": "Trusted",
+    "classifierReason": "created as empty; component: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia"
+  },
+  {
     "file": "files/no-ai/n01_camera_capture.jpg",
     "expected": "no-ai",
     "description": "Simulated camera capture: digitalCapture.",
@@ -89,9 +103,16 @@
     "classifierReason": "created as digitalCreation"
   },
   {
-    "file": "files/no-ai/n04_hdr_composite_capture.jpg",
+    "file": "files/no-ai/n04_hdr_computational_capture.jpg",
     "expected": "no-ai",
-    "description": "Simulated HDR merge: compositeCapture.",
+    "description": "Simulated in-camera HDR: computationalCapture, which IPTC defines as frames merged by signal processing and/or non-generative AI.",
+    "validationState": "Trusted",
+    "classifierReason": "created as computationalCapture"
+  },
+  {
+    "file": "files/no-ai/n08_composite_of_captures.jpg",
+    "expected": "no-ai",
+    "description": "Simulated collage of real-life captures: compositeCapture.",
     "validationState": "Trusted",
     "classifierReason": "created as compositeCapture"
   },
@@ -159,9 +180,51 @@
     "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.edited as compositeWithTrainedAlgorithmicMedia; c2pa.ai-disclosure present"
   },
   {
+    "file": "files/includes-ai/i08_composite_synthetic.jpg",
+    "expected": "includes-ai",
+    "description": "compositeSynthetic: IPTC defines it as a composite of several elements, at least one of which is generative AI.",
+    "validationState": "Trusted",
+    "classifierReason": "created as compositeSynthetic"
+  },
+  {
+    "file": "files/includes-ai/i09_generative_edit_in_related_action.jpg",
+    "expected": "includes-ai",
+    "description": "n01 edited; the generative fill appears only in a related action, which consumers merge with its primary c2pa.edited.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.edited as compositeWithTrainedAlgorithmicMedia"
+  },
+  {
+    "file": "files/includes-ai/i10_ai_origin_incomplete_history.jpg",
+    "expected": "includes-ai",
+    "description": "trainedAlgorithmicMedia with allActionsIncluded: false. AI is present, but unrecorded changes may have added other content, so it can't be called entirely AI.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; history may be incomplete (allActionsIncluded not true)"
+  },
+  {
+    "file": "files/includes-ai/i11_ai_origin_unknown_component.jpg",
+    "expected": "includes-ai",
+    "description": "a01 with a component of unknown provenance placed into it: AI is present, the rest is unknown.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia; component: ingredient 'photo-unsigned.jpg' has no manifest or source type"
+  },
+  {
+    "file": "files/includes-ai/i12_empty_with_mixed_components.jpg",
+    "expected": "includes-ai",
+    "description": "Blank canvas (empty) with a01 and n01 placed on it.",
+    "validationState": "Trusted",
+    "classifierReason": "created as empty; component: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia; component: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture"
+  },
+  {
     "file": "files/no-ai/n07_ai_component_deleted.jpg",
     "expected": "no-ai",
     "description": "i02 with its AI component removed, recorded by c2pa.deleted. AI is in the history but not in the current content.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.deleted removes a component"
+  },
+  {
+    "file": "files/no-ai/n09_ai_component_deleted_via_template_parameters.jpg",
+    "expected": "no-ai",
+    "description": "As n07, but the deletion's ingredient reference comes from a template's deprecated templateParameters, which consumers must still merge.",
     "validationState": "Trusted",
     "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.deleted removes a component"
   },
@@ -208,13 +271,6 @@
     "classifierReason": "no readable C2PA manifest"
   },
   {
-    "file": "files/unknown/u07_composite_synthetic.jpg",
-    "expected": "unknown",
-    "description": "compositeSynthetic says synthetic elements are present, not whether a trained model made them.",
-    "validationState": "Trusted",
-    "classifierReason": "created as compositeSynthetic"
-  },
-  {
     "file": "files/unknown/u08_algorithmically_enhanced.jpg",
     "expected": "unknown",
     "description": "n01 with an algorithmicallyEnhanced edit; the type does not say whether the algorithm was a trained model.",
@@ -248,5 +304,12 @@
     "description": "virtualRecording allows synthetic, possibly generative, elements.",
     "validationState": "Trusted",
     "classifierReason": "created as virtualRecording"
+  },
+  {
+    "file": "files/unknown/u13_empty_with_unknown_component.jpg",
+    "expected": "unknown",
+    "description": "Blank canvas (empty) whose only content has no manifest or declared source type.",
+    "validationState": "Trusted",
+    "classifierReason": "created as empty; component: ingredient 'photo-unsigned.jpg' has no manifest or source type"
   }
 ]

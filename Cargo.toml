@@ -9,5 +9,8 @@ description = "Generates C2PA-signed test assets labelled AI / includes AI / no 
 # Built against the local c2pa-rs checkout next to this repository.
 c2pa = { path = "../c2pa-rs/sdk", features = ["file_io", "add_thumbnails"] }
 anyhow = "1"
+base64 = "0.23"
+# Same version c2pa uses, for typed CBOR values in ActionTemplate::template_parameters.
+c2pa_cbor = "0.78"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 serde_json = "1"
