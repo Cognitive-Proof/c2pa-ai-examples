@@ -2,7 +2,8 @@
 
 The reference classifier ([`src/classify.rs`](../src/classify.rs)) answers one question: what does
 the signed provenance declare about **generative** AI in the current content? These charts follow
-the code. [The policy](../README.md#the-policy) in the README gives the reasons.
+the code. [The step-by-step guide](step-by-step-guide.md) explains it in plain language, and
+[the policy](../README.md#the-policy) in the README gives the reasons.
 
 ## 1. The verdict
 
