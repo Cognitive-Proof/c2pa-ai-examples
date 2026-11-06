@@ -115,6 +115,8 @@ struct Label {
     story: &'static str,
     /// A status code the SDK reports against the specification; see the README.
     known_sdk_issue: Option<(&'static str, &'static str)>,
+    /// For a deliberately invalid fixture: text every lint message must contain.
+    expected_lint: Option<&'static str>,
 }
 
 struct Gen {
@@ -136,7 +138,7 @@ impl Gen {
     }
 
     fn label(&mut self, path: &Path, expected: Verdict, story: &'static str) {
-        self.labels.push(Label { path: path.to_owned(), expected, story, known_sdk_issue: None });
+        self.labels.push(Label { path: path.to_owned(), expected, story, known_sdk_issue: None, expected_lint: None });
     }
 
     /// Signs `src` with a v2 actions assertion and the given ingredients.
@@ -280,6 +282,28 @@ fn views(r: &Reader) -> Result<(Value, Value)> {
     Ok((serde_json::from_str(&r.json())?, serde_json::from_str(&r.detailed_json())?))
 }
 
+/// Removes failure status `code` everywhere in a store: active manifest and ingredients.
+fn drop_status(v: &mut Value, code: &str) {
+    match v {
+        Value::Object(o) => {
+            if let Some(Value::Array(f)) = o.get_mut("failure") {
+                f.retain(|x| x["code"] != code);
+            }
+            if let Some(Value::Array(s)) = o.get_mut("validation_status") {
+                s.retain(|x| x["code"] != code);
+            }
+            o.values_mut().for_each(|v| drop_status(v, code));
+        }
+        Value::Array(a) => a.iter_mut().for_each(|v| drop_status(v, code)),
+        _ => {}
+    }
+}
+
+/// The `w`×`h` region of `img` at (`x`, `y`).
+fn photo_region(img: &image::RgbImage, x: u32, y: u32, w: u32, h: u32) -> image::RgbImage {
+    image::imageops::crop_imm(img, x, y, w, h).to_image()
+}
+
 /// `cargo run --release -- FILE...` lints and classifies existing files instead of generating.
 fn inspect(ctx: &Arc<Context>, paths: &[String]) -> Result<()> {
     for path in paths {
@@ -345,6 +369,9 @@ fn main() -> Result<()> {
     let mut annotated = dream.clone();
     sources::paste(&mut annotated, &sources::illustration(), 420, 300, 180, 140);
     annotated.save(g.src("dream-annotated.jpg"))?;
+    let mut partly_removed = with_ai.clone();
+    sources::paste(&mut partly_removed, &photo_region(&photo, 40, 40, 110, 160), 40, 40, 110, 160);
+    partly_removed.save(g.src("photo-placed-partly-removed.jpg"))?;
     // i02's pixels cropped to the region away from its placed AI element.
     image::imageops::crop_imm(&with_ai, 280, 220, 360, 260).to_image().save(g.src("placed-cropped-no-ai.jpg"))?;
     let mut with_unsigned = dream.clone();
@@ -361,9 +388,10 @@ fn main() -> Result<()> {
     virtual_set.save(g.src("virtual.jpg"))?;
     sources::write_wav(&g.src("speech.wav"), true)?;
     sources::write_wav(&g.src("field.wav"), false)?;
-    let have_mp4 = sources::write_mp4(&g.src("clip.mp4")).is_ok();
+    let have_mp4 = sources::write_mp4(&g.src("clip.mp4"), false).is_ok()
+        && sources::write_mp4(&g.src("clip-audio.mp4"), true).is_ok();
     if !have_mp4 {
-        eprintln!("warning: ffmpeg unavailable, skipping a04_text_to_video.mp4");
+        eprintln!("warning: ffmpeg unavailable, skipping the MP4 cases");
     }
 
     let model = || agent("Fabrikam Diffusion", "4.2");
@@ -414,6 +442,7 @@ fn main() -> Result<()> {
         story: "c2pa.created takes its trainedAlgorithmicMedia source type from a template, which consumers must merge.",
         known_sdk_issue: Some(("assertion.action.malformed",
             "c2pa-rs checks c2pa.created for a digitalSourceType before applying templates")),
+        expected_lint: None,
     });
 
     g.sign_with(Ai, "a08_ai_disclosure_fully_autonomous.jpg", &g.src("dream.jpg"), &[],
@@ -574,6 +603,63 @@ fn main() -> Result<()> {
         &[parent(&i02)],
         "i02 cropped so the placed AI element is outside the frame. A crop doesn't say what it removed, so the AI is still in the provenance and its removal isn't established.")?;
 
+    let raw_ai_element = g.src("dream.jpg");
+    g.sign(IncludesAi, "i16_ai_declared_on_placed_action.jpg", &g.src("photo-placed.jpg"),
+        actions(vec![opened(), json!({
+            "action": "c2pa.placed",
+            "digitalSourceType": dst("trainedAlgorithmicMedia"),
+            "softwareAgent": editor(),
+            "parameters": { "ingredientIds": ["ai-element"] },
+        })], true),
+        &[parent(&n01), component("ai-element", &raw_ai_element)],
+        "n01 with an unsigned element placed; only the c2pa.placed action declares it trainedAlgorithmicMedia.")?;
+    g.sign(IncludesAi, "i17_ai_component_partly_deleted.jpg", &g.src("photo-placed-partly-removed.jpg"),
+        actions(vec![opened(), json!({
+            "action": "c2pa.deleted",
+            "softwareAgent": editor(),
+            "description": "Removed part of the placed element",
+        })], true),
+        &[parent(&i02)],
+        "i02 with part of its AI element deleted. The c2pa.deleted references no ingredient, so it doesn't establish the whole AI component was removed.")?;
+    g.sign(IncludesAi, "i18_generative_fill_region.jpg", &g.src("photo-filled.jpg"),
+        actions(vec![opened(), json!({
+            "action": "c2pa.edited",
+            "digitalSourceType": dst("compositeWithTrainedAlgorithmicMedia"),
+            "softwareAgent": agent("Northwind Photo Editor Generative Fill", "12.3"),
+            "description": "Generative fill of a region",
+            "changes": [{ "region": [{ "type": "spatial", "shape": {
+                "type": "rectangle", "unit": "pixel", "origin": { "x": 380, "y": 210 }, "width": 200, "height": 180,
+            } }] }],
+        })], true),
+        &[parent(&n01)],
+        "As i01, with the filled rectangle recorded in the action's changes. A region of AI is still AI in the content.")?;
+    if have_mp4 {
+        let clip = g.src("clip-audio.mp4");
+        g.sign(IncludesAi, "i19_video_with_ai_voice_track.mp4", &clip,
+            actions(vec![
+                created("digitalCapture", camera(), "Recorded video"),
+                json!({
+                    "action": "c2pa.dubbed",
+                    "digitalSourceType": dst("trainedAlgorithmicMedia"),
+                    "softwareAgent": agent("Fabrikam Voice", "3.0"),
+                    "description": "Replaced the audio track with synthetic speech",
+                }),
+            ], true),
+            &[],
+            "Captured video whose audio track was dubbed with synthetic speech: AI in one track of mixed media.")?;
+    }
+    g.sign_with(IncludesAi, "i20_ai_in_second_actions_assertion.jpg", &g.src("photo-filled.jpg"), &[parent(&n01)],
+        "Two actions assertions; the generative fill is only in the second, so consumers must read all of them.", |b| {
+            b.add_assertion("c2pa.actions.v2", &actions(vec![opened()], true))?;
+            b.add_assertion("c2pa.actions.v2", &actions(vec![json!({
+            "action": "c2pa.edited",
+            "digitalSourceType": dst("compositeWithTrainedAlgorithmicMedia"),
+            "softwareAgent": agent("Northwind Photo Editor Generative Fill", "12.3"),
+            "description": "Generative fill of a region",
+        })], true))?;
+            Ok(())
+        })?;
+
     let target = component_ref(&g.ctx, &i02)?;
     g.sign_with(NoAi, "n07_ai_component_deleted.jpg", &g.src("photo.jpg"), &[parent(&i02)],
         "i02 with its AI component removed, recorded by c2pa.deleted. AI is in the history but not in the current content.", |b| {
@@ -592,6 +678,16 @@ fn main() -> Result<()> {
             b.add_assertion("c2pa.ai-disclosure", &model_disclosure("c2pa.types.model.sklearn", "Northwind Exposure Fusion"))?;
             Ok(())
         })?;
+
+    g.sign(NoAi, "n11_capture_then_declared_human_edit.jpg", &g.src("photo-adjusted.jpg"),
+        actions(vec![opened(), json!({
+            "action": "c2pa.edited",
+            "digitalSourceType": dst("humanEdits"),
+            "softwareAgent": editor(),
+            "description": "Retouched by hand",
+        })], true),
+        &[parent(&n01)],
+        "n01 edited with an explicit humanEdits source type: an affirmative non-generative declaration, unlike u16.")?;
 
     // ---- unknown: the provenance cannot settle the question -------------------------------
     let u01 = g.out(Unknown, "u01_no_manifest.jpg");
@@ -661,10 +757,62 @@ fn main() -> Result<()> {
     g.sign(Unknown, "u15_capture_then_custom_action.jpg", &g.src("photo-adjusted.jpg"),
         actions(vec![opened(), edit("com.northwindtraders.stylize", editor())], true), &[parent(&n01)],
         "n01 with an entity-specific action and no digitalSourceType. The history is complete, but what that action did is unknown.")?;
+    g.sign(Unknown, "u16_capture_then_unspecified_edit.jpg", &g.src("photo-adjusted.jpg"),
+        actions(vec![opened(), edit("c2pa.edited", editor())], true), &[parent(&n01)],
+        "n01 then c2pa.edited with no source type. The spec doesn't require a generative edit to declare one, so a complete history still can't rule it out.")?;
+    let redacted = component_ref(&g.ctx, &i02)?.url();
+    let out = g.out(Unknown, "u17_ai_ingredient_redacted.jpg");
+    let mut builder = g.builder(&out, &g.lenient)?;
+    builder.add_ingredient_from_stream(
+        json!({ "title": "i02_ai_element_placed.jpg", "relationship": "parentOf", "label": "parent" }).to_string(),
+        "image/jpeg",
+        &mut File::open(&i02)?,
+    )?;
+    builder.definition.redactions = Some(vec![redacted.clone()]);
+    builder.add_assertion("c2pa.actions.v2", &actions(vec![opened(), json!({
+        "action": "c2pa.redacted",
+        "softwareAgent": editor(),
+        "parameters": { "redacted": redacted },
+    })], true))?;
+    g.save(&mut builder, &g.src("photo-placed.jpg"), &out)?;
+    g.labels.push(Label {
+        path: out,
+        expected: Unknown,
+        story: "i02 opened and its AI ingredient assertion redacted. The AI content is still there; only its provenance is hidden, so redaction must not read as no AI.",
+        known_sdk_issue: Some(("assertion.action.ingredientMismatch",
+            "c2pa-rs rejects i02's c2pa.placed for referencing the redacted ingredient, which Validate_Assertions allows")),
+        expected_lint: None,
+    });
     g.sign(Unknown, "u13_empty_with_unknown_component.jpg", &g.src("photo-unsigned.jpg"),
         actions(vec![empty_created(), placed("photo", editor())], true),
         &[component("photo", &unsigned_photo)],
         "Blank canvas (empty) whose only content has no manifest or declared source type.")?;
+
+    // ---- invalid: deliberately malformed c2pa.ai-disclosure, for negative schema tests -----
+    let bad = [
+        ("x01_disclosure_missing_model_type.jpg", json!({ "modelName": "Fabrikam Diffusion" }), "has no modelType"),
+        ("x02_disclosure_invalid_oversight_level.jpg",
+            json!({ "modelType": "c2pa.types.model", "contentProfile": { "humanOversightLevel": "mostly_autonomous" } }),
+            "invalid humanOversightLevel"),
+        ("x03_disclosure_scalar_scientific_domain.jpg",
+            json!({ "modelType": "c2pa.types.model", "scientificDomain": "cs.CV" }), "invalid scientificDomain"),
+        ("x04_disclosure_empty_scientific_domain.jpg",
+            json!({ "modelType": "c2pa.types.model", "scientificDomain": [] }), "invalid scientificDomain"),
+    ];
+    for (name, data, expect) in bad {
+        let out = root.join("files/invalid").join(name);
+        let mut builder = g.builder(&out, &g.ctx)?;
+        builder.add_assertion("c2pa.actions.v2", &actions(vec![created("trainedAlgorithmicMedia", model(), "Generated from a text prompt")], true))?;
+        builder.add_assertion("c2pa.ai-disclosure", &data)?;
+        g.save(&mut builder, &g.src("dream.jpg"), &out)?;
+        g.labels.push(Label {
+            path: out,
+            expected: Ai,
+            story: "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure; for negative schema tests, not classification.",
+            known_sdk_issue: None,
+            expected_lint: Some(expect),
+        });
+    }
 
     check(&g, &root)
 }
@@ -693,15 +841,18 @@ fn check(g: &Gen, root: &Path) -> Result<()> {
         let (got, why, status) = match (l.known_sdk_issue, &views) {
             (Some((code, _)), Some((j, d))) => {
                 let mut j = j.clone();
-                if let Some(f) = j["validation_results"]["activeManifest"]["failure"].as_array_mut() {
-                    f.retain(|x| x["code"] != code);
-                }
+                drop_status(&mut j, code);
                 let (v, why) = classify::classify(Some(Store { json: &j, detailed: d }));
                 (v, why, if v == l.expected && sdk_verdict != l.expected { "KNOWN" } else { "ok" })
             }
             _ => (sdk_verdict, sdk_why.clone(), "ok"),
         };
-        let ok = got == l.expected && lint.is_empty();
+        let lint_ok = match l.expected_lint {
+            None => lint.is_empty(),
+            Some(text) => !lint.is_empty() && lint.iter().all(|m| m.contains(text)),
+        };
+        let status = if l.expected_lint.is_some() && lint_ok { "INVAL" } else { status };
+        let ok = got == l.expected && lint_ok;
         problems += usize::from(!ok);
         println!("{:<5} {:<12} {:<55} {}", if ok { status } else { "FAIL" }, got.dir(), rel, why);
 
@@ -712,6 +863,9 @@ fn check(g: &Gen, root: &Path) -> Result<()> {
             "validationState": state,
             "classifierReason": why,
         });
+        if let Some(text) = l.expected_lint {
+            row["expectedLint"] = json!(text);
+        }
         if let Some((code, note)) = l.known_sdk_issue {
             row["knownSdkIssue"] = json!({ "code": code, "note": note, "sdkVerdict": sdk_verdict.dir() });
         }
@@ -719,6 +873,6 @@ fn check(g: &Gen, root: &Path) -> Result<()> {
     }
     fs::write(root.join("labels.json"), serde_json::to_string_pretty(&rows)? + "\n")?;
     anyhow::ensure!(problems == 0, "{problems} file(s) failed lint or disagree with their label");
-    println!("\n{} files, all labels confirmed, no lint problems", rows.len());
+    println!("\n{} files, all labels confirmed, no unexpected lint problems", rows.len());
     Ok(())
 }

@@ -205,7 +205,7 @@
     "expected": "includes-ai",
     "description": "n01 edited; the generative fill appears only in a related action, which consumers merge with its primary c2pa.edited.",
     "validationState": "Trusted",
-    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.edited as compositeWithTrainedAlgorithmicMedia"
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.edited may add content and has no digitalSourceType; c2pa.edited as compositeWithTrainedAlgorithmicMedia"
   },
   {
     "file": "files/includes-ai/i10_ai_origin_incomplete_history.jpg",
@@ -250,18 +250,53 @@
     "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; component: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia"
   },
   {
+    "file": "files/includes-ai/i16_ai_declared_on_placed_action.jpg",
+    "expected": "includes-ai",
+    "description": "n01 with an unsigned element placed; only the c2pa.placed action declares it trainedAlgorithmicMedia.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.placed as trainedAlgorithmicMedia; component: ingredient 'dream.jpg' declares trainedAlgorithmicMedia (no manifest)"
+  },
+  {
+    "file": "files/includes-ai/i17_ai_component_partly_deleted.jpg",
+    "expected": "includes-ai",
+    "description": "i02 with part of its AI element deleted. The c2pa.deleted references no ingredient, so it doesn't establish the whole AI component was removed.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; component: ingredient 'a01_text_to_image.jpg' -> created as trainedAlgorithmicMedia; c2pa.deleted of part of the content"
+  },
+  {
+    "file": "files/includes-ai/i18_generative_fill_region.jpg",
+    "expected": "includes-ai",
+    "description": "As i01, with the filled rectangle recorded in the action's changes. A region of AI is still AI in the content.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.edited as compositeWithTrainedAlgorithmicMedia"
+  },
+  {
+    "file": "files/includes-ai/i19_video_with_ai_voice_track.mp4",
+    "expected": "includes-ai",
+    "description": "Captured video whose audio track was dubbed with synthetic speech: AI in one track of mixed media.",
+    "validationState": "Trusted",
+    "classifierReason": "created as digitalCapture; c2pa.dubbed as trainedAlgorithmicMedia"
+  },
+  {
+    "file": "files/includes-ai/i20_ai_in_second_actions_assertion.jpg",
+    "expected": "includes-ai",
+    "description": "Two actions assertions; the generative fill is only in the second, so consumers must read all of them.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.edited as compositeWithTrainedAlgorithmicMedia"
+  },
+  {
     "file": "files/no-ai/n07_ai_component_deleted.jpg",
     "expected": "no-ai",
     "description": "i02 with its AI component removed, recorded by c2pa.deleted. AI is in the history but not in the current content.",
     "validationState": "Trusted",
-    "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.deleted removes a component"
+    "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.deleted removes a whole component"
   },
   {
     "file": "files/no-ai/n09_ai_component_deleted_via_template_parameters.jpg",
     "expected": "no-ai",
     "description": "As n07, but the deletion's ingredient reference comes from a template's deprecated templateParameters, which consumers must still merge.",
     "validationState": "Trusted",
-    "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.deleted removes a component"
+    "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.deleted removes a whole component"
   },
   {
     "file": "files/no-ai/n10_computational_capture_with_model_disclosure.jpg",
@@ -269,6 +304,13 @@
     "description": "computationalCapture with a c2pa.ai-disclosure naming a scikit-learn model: non-generative AI that the source type already declares.",
     "validationState": "Trusted",
     "classifierReason": "created as computationalCapture; c2pa.ai-disclosure present"
+  },
+  {
+    "file": "files/no-ai/n11_capture_then_declared_human_edit.jpg",
+    "expected": "no-ai",
+    "description": "n01 edited with an explicit humanEdits source type: an affirmative non-generative declaration, unlike u16.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.edited as humanEdits"
   },
   {
     "file": "files/unknown/u01_no_manifest.jpg",
@@ -362,10 +404,61 @@
     "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; com.northwindtraders.stylize has unknown effect and no digitalSourceType"
   },
   {
+    "file": "files/unknown/u16_capture_then_unspecified_edit.jpg",
+    "expected": "unknown",
+    "description": "n01 then c2pa.edited with no source type. The spec doesn't require a generative edit to declare one, so a complete history still can't rule it out.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.edited may add content and has no digitalSourceType"
+  },
+  {
+    "file": "files/unknown/u17_ai_ingredient_redacted.jpg",
+    "expected": "unknown",
+    "description": "i02 opened and its AI ingredient assertion redacted. The AI content is still there; only its provenance is hidden, so redaction must not read as no AI.",
+    "validationState": "Invalid",
+    "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; redacts self#jumbf=/c2pa/urn:c2pa:47f63b22-0420-461c-b836-8c297210d5df/c2pa.assertions/c2pa.ingredient.v3__1",
+    "knownSdkIssue": {
+      "code": "assertion.action.ingredientMismatch",
+      "note": "c2pa-rs rejects i02's c2pa.placed for referencing the redacted ingredient, which Validate_Assertions allows",
+      "sdkVerdict": "unknown"
+    }
+  },
+  {
     "file": "files/unknown/u13_empty_with_unknown_component.jpg",
     "expected": "unknown",
     "description": "Blank canvas (empty) whose only content has no manifest or declared source type.",
     "validationState": "Trusted",
     "classifierReason": "created as empty; component: ingredient 'photo-unsigned.jpg' has no manifest or source type"
+  },
+  {
+    "file": "files/invalid/x01_disclosure_missing_model_type.jpg",
+    "expected": "ai",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure; for negative schema tests, not classification.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
+    "expectedLint": "has no modelType"
+  },
+  {
+    "file": "files/invalid/x02_disclosure_invalid_oversight_level.jpg",
+    "expected": "ai",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure; for negative schema tests, not classification.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
+    "expectedLint": "invalid humanOversightLevel"
+  },
+  {
+    "file": "files/invalid/x03_disclosure_scalar_scientific_domain.jpg",
+    "expected": "ai",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure; for negative schema tests, not classification.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
+    "expectedLint": "invalid scientificDomain"
+  },
+  {
+    "file": "files/invalid/x04_disclosure_empty_scientific_domain.jpg",
+    "expected": "ai",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure; for negative schema tests, not classification.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
+    "expectedLint": "invalid scientificDomain"
   }
 ]

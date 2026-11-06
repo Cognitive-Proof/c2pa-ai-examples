@@ -12,7 +12,10 @@
 //! with a public test certificate, so trust is a property of the reader's trust list, not of
 //! the file.
 
-use std::{collections::HashSet, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use serde_json::{Map, Value};
 
@@ -76,8 +79,10 @@ enum Source {
 }
 
 fn source_of(uri: &str) -> Source {
+    // trainedAlgorithmicData is data produced with a trained model (CSV, pickle): that model
+    // may as well be a classifier as a generator, so it doesn't establish generative AI.
     if uri == format!("{C2PA}trainedAlgorithmicData") {
-        return Source::Ai;
+        return Source::Unclear;
     }
     if uri == format!("{C2PA}empty") {
         return Source::Empty;
@@ -102,7 +107,7 @@ fn source_of(uri: &str) -> Source {
 enum Effect {
     /// Rearranges, removes or re-encodes existing content, or touches none of it.
     Preserves,
-    /// May add content of its own, such as drawing, text or a generic edit.
+    /// May add content of its own, such as drawing, text, a filter or style, or a generic edit.
     Adds,
     /// Not a specification action, or `c2pa.unknown`: what it did can't be known.
     Unknown,
@@ -112,7 +117,7 @@ fn effect_of(action: &str) -> Effect {
     match action {
         "c2pa.adjustedColor" | "c2pa.changedSpeed" | "c2pa.color_adjustments" | "c2pa.converted"
         | "c2pa.cropped" | "c2pa.deleted" | "c2pa.edited.metadata" | "c2pa.enhanced"
-        | "c2pa.filtered" | "c2pa.mastered" | "c2pa.orientation" | "c2pa.published"
+        | "c2pa.mastered" | "c2pa.orientation" | "c2pa.published"
         | "c2pa.redacted" | "c2pa.removed" | "c2pa.repackaged" | "c2pa.resized"
         | "c2pa.resized.proportional" | "c2pa.reviewed" | "c2pa.transcoded" | "c2pa.trimmed"
         | "c2pa.watermarked" | "c2pa.watermarked.bound" | "c2pa.watermarked.unbound" => {
@@ -127,6 +132,7 @@ fn effect_of(action: &str) -> Effect {
 /// Source types that declare any AI involvement, generative or not.
 fn declares_ai_use(uri: &str) -> bool {
     matches!(source_of(uri), Source::Ai | Source::IncludesAi)
+        || uri == format!("{C2PA}trainedAlgorithmicData")
         || uri == format!("{IPTC}computationalCapture")
         || uri == format!("{IPTC}algorithmicallyEnhanced")
 }
@@ -246,7 +252,13 @@ pub fn classify(store: Option<Store>) -> (Verdict, String) {
     }
 }
 
-fn ingredient(store: Store, ing: &Value, deleted: &HashSet<(String, String)>) -> (Verdict, String) {
+/// `declared` is a `digitalSourceType` the action that placed this ingredient gave it.
+fn ingredient(
+    store: Store,
+    ing: &Value,
+    deleted: &HashSet<(String, String)>,
+    declared: Option<&str>,
+) -> (Verdict, String) {
     let title = ing["title"].as_str().unwrap_or("untitled ingredient");
     let bad = failures(&ing["validation_results"]);
     if !bad.is_empty() {
@@ -256,8 +268,9 @@ fn ingredient(store: Store, ing: &Value, deleted: &HashSet<(String, String)>) ->
         let (v, why) = manifest(store, label, deleted);
         return (v, format!("ingredient '{title}' -> {why}"));
     }
-    // An ingredient without a manifest may still declare its own source type.
-    match ing["digital_source_type"].as_str() {
+    // An ingredient without a manifest may still declare its own source type, or the action
+    // that placed it may.
+    match ing["digital_source_type"].as_str().or(declared) {
         Some(uri) => {
             let v = match source_of(uri) {
                 Source::Ai => Verdict::Ai,
@@ -281,7 +294,7 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
     if store.is_update(label) {
         return match parent {
             Some(p) => {
-                let (v, why) = ingredient(store, p, deleted);
+                let (v, why) = ingredient(store, p, deleted, None);
                 (v, format!("update manifest over {why}"))
             }
             None => (Verdict::Unknown, "update manifest with no parent ingredient".into()),
@@ -302,6 +315,18 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
         }
     }
 
+    // Source types declared on the c2pa.placed action, by the ingredient assertion they placed.
+    let mut placed_as: HashMap<&str, &str> = HashMap::new();
+    for a in actions.iter().filter(|a| a["action"] == "c2pa.placed") {
+        if let Some(uri) = a["digitalSourceType"].as_str() {
+            for r in a["parameters"]["ingredients"].as_array().into_iter().flatten() {
+                if let Some(l) = r["url"].as_str().and_then(|u| u.rsplit_once("c2pa.assertions/")) {
+                    placed_as.insert(l.1, uri);
+                }
+            }
+        }
+    }
+
     let components: Vec<(Verdict, String)> = ingredients
         .iter()
         .filter(|i| i["relationship"] == "componentOf")
@@ -309,7 +334,10 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
             let key = (label.to_owned(), i["label"].as_str().unwrap_or_default().to_owned());
             !deleted.contains(&key)
         })
-        .map(|i| ingredient(store, i, &deleted))
+        .map(|i| {
+            let declared = i["label"].as_str().and_then(|l| placed_as.get(l).copied());
+            ingredient(store, i, &deleted, declared)
+        })
         .collect();
 
     let mut notes = Vec::new();
@@ -343,15 +371,27 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
             }
             ("c2pa.opened", _) => {
                 let (v, why) = match parent {
-                    Some(p) => ingredient(store, p, &deleted),
+                    Some(p) => ingredient(store, p, &deleted, None),
                     None => (Verdict::Unknown, "opened with no parent ingredient".into()),
                 };
                 notes.push(format!("opened parent: {why}"));
                 origin = Some(v);
             }
-            ("c2pa.deleted", _) => notes.push("c2pa.deleted removes a component".into()),
-            // Placed content is judged by its componentOf ingredient below.
-            ("c2pa.placed", _) => {}
+            ("c2pa.deleted", _) if a["parameters"]["ingredients"].is_array() => {
+                notes.push("c2pa.deleted removes a whole component".into())
+            }
+            ("c2pa.deleted", _) => notes.push("c2pa.deleted of part of the content".into()),
+            // Placed content is judged by its componentOf ingredient below, with any source
+            // type declared here filling in for an ingredient that declares none.
+            ("c2pa.placed", None) => {}
+            ("c2pa.placed", Some(uri)) => {
+                notes.push(format!("c2pa.placed as {}", short(uri)));
+                match source_of(uri) {
+                    Source::Ai | Source::IncludesAi => ai_signal = true,
+                    Source::Unclear => unclear = true,
+                    Source::NoAi | Source::Empty | Source::HumanEdits => mixed = true,
+                }
+            }
             (_, Some(uri)) => {
                 notes.push(format!("{name} as {}", short(uri)));
                 ai_use_declared |= declares_ai_use(uri);
@@ -373,9 +413,13 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
             }
             (_, None) => match effect_of(name) {
                 Effect::Preserves => {}
-                // A specification action that adds content without declaring a source type
-                // isn't assumed generative, but it does mean the content isn't all AI.
-                Effect::Adds => mixed = true,
+                // The spec doesn't require a generative edit to declare a source type, so an
+                // edit that may add content and declares none could be either.
+                Effect::Adds => {
+                    notes.push(format!("{name} may add content and has no digitalSourceType"));
+                    unclear = true;
+                    mixed = true;
+                }
                 Effect::Unknown => {
                     notes.push(format!("{name} has unknown effect and no digitalSourceType"));
                     unclear = true;
@@ -391,6 +435,16 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
             Verdict::Unknown
         }
     };
+
+    // Redacting an ingredient or actions assertion hides provenance, not content: whatever it
+    // recorded can no longer be seen, so it can't count as absent.
+    for r in m["redactions"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        let assertion = r.rsplit_once("c2pa.assertions/").map_or("", |(_, a)| a);
+        if assertion.starts_with("c2pa.ingredient") || assertion.starts_with("c2pa.actions") {
+            notes.push(format!("redacts {r}"));
+            unclear = true;
+        }
+    }
 
     // The disclosure names AI/ML models but not that they generated content. With a source
     // type that already declares AI use it adds nothing; without one, a model was used in an
@@ -582,6 +636,39 @@ mod tests {
         assert_eq!(merged["digitalSourceType"], AI);
         assert_eq!(merged["description"], "own");
         assert_eq!(merged["softwareAgent"]["name"], "w");
+    }
+
+    #[test]
+    fn edit_without_source_type_is_not_assumed_non_generative() {
+        let after_capture = |edit: Value| {
+            single(json!({ "actions": [{ "action": "c2pa.created", "digitalSourceType": CAPTURE }, edit], "allActionsIncluded": true }))
+        };
+        assert_eq!(after_capture(json!({ "action": "c2pa.edited" })), Verdict::Unknown);
+        assert_eq!(after_capture(json!({ "action": "c2pa.filtered" })), Verdict::Unknown);
+        // An explicit non-generative declaration settles it.
+        assert_eq!(after_capture(json!({ "action": "c2pa.edited", "digitalSourceType": HUMAN_EDITS })), Verdict::NoAi);
+        assert_eq!(after_capture(json!({ "action": "c2pa.cropped" })), Verdict::NoAi);
+    }
+
+    #[test]
+    fn source_type_on_placed_action_counts() {
+        let actions = json!({
+            "actions": [
+                { "action": "c2pa.created", "digitalSourceType": CAPTURE },
+                { "action": "c2pa.placed", "digitalSourceType": AI,
+                  "parameters": { "ingredients": [{ "url": "self#jumbf=c2pa.assertions/c2pa.ingredient.v3" }] } },
+            ],
+            "allActionsIncluded": true,
+        });
+        let unsigned = json!([{ "relationship": "componentOf", "label": "c2pa.ingredient.v3", "title": "raw.jpg" }]);
+        assert_eq!(classify_store(&[("m", actions, unsigned, false)]), Verdict::IncludesAi);
+    }
+
+    #[test]
+    fn trained_algorithmic_data_is_not_assumed_generative() {
+        let data = "http://c2pa.org/digitalsourcetype/trainedAlgorithmicData";
+        let actions = json!({ "actions": [{ "action": "c2pa.created", "digitalSourceType": data }], "allActionsIncluded": true });
+        assert_eq!(single(actions), Verdict::Unknown);
     }
 
     #[test]

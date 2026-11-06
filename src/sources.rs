@@ -164,11 +164,14 @@ pub fn write_wav(path: &Path, ai: bool) -> Result<()> {
     Ok(())
 }
 
-/// Two-second synthetic MP4 made with ffmpeg's test source.
-pub fn write_mp4(path: &Path) -> Result<()> {
-    let status = Command::new("ffmpeg")
-        .args(["-loglevel", "error", "-y", "-f", "lavfi", "-i"])
-        .arg("mandelbrot=size=320x240:rate=24")
+/// Two-second synthetic MP4 made with ffmpeg's test sources, with an AAC tone track if `audio`.
+pub fn write_mp4(path: &Path, audio: bool) -> Result<()> {
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-loglevel", "error", "-y", "-f", "lavfi", "-i", "mandelbrot=size=320x240:rate=24"]);
+    if audio {
+        cmd.args(["-f", "lavfi", "-i", "sine=frequency=330:sample_rate=48000", "-c:a", "aac", "-shortest"]);
+    }
+    let status = cmd
         .args(["-t", "2", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-movflags", "+faststart"])
         .arg(path)
         .status()?;
