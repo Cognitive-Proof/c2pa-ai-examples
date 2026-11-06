@@ -46,6 +46,9 @@ classifier gives are in [`labels.json`](labels.json).
 | `a10_ai_disclosure_human_validated.jpg` | Same with `human_validated`: human approval doesn't make the content partly human-made. |
 | `a11_empty_with_ai_component.jpg` | Blank canvas (`empty`) whose only content is a01. |
 | `a12_ai_then_generative_inpaint.jpg` | a01 with a region inpainted: `compositeWithTrainedAlgorithmicMedia` is generative augmentation, so the content stays AI. |
+| `a14_ai_minimal_disclosure.jpg` | `trainedAlgorithmicMedia` with the smallest valid `c2pa.ai-disclosure`: only `modelType`. |
+| `a15_ai_disclosure_empty_content_profile.jpg` | As a14 with an empty `contentProfile`: `humanOversightLevel` is optional. |
+| `a16_ai_two_model_disclosures.jpg` | Two models, each with its own `c2pa.ai-disclosure`, linked from `c2pa.created` through `relatedAssertions`. |
 | `a13_text_to_image_with_reference_input.jpg` | Text-to-image with an unsigned reference image as an `inputTo` ingredient. An input to the model isn't placed content, so its unknown provenance doesn't count. |
 | **includes-ai** | |
 | `i01_generative_fill.jpg` | Camera photo (n01) with a region filled; `c2pa.edited` with `compositeWithTrainedAlgorithmicMedia`. |
@@ -68,9 +71,10 @@ classifier gives are in [`labels.json`](labels.json).
 | `i18_generative_fill_region.jpg` | As i01, with the filled rectangle recorded in the action's `changes` region of interest. |
 | `i19_video_with_ai_voice_track.mp4` | Captured video whose audio track was dubbed (`c2pa.dubbed`) with synthetic speech: AI in one track of mixed media. |
 | `i20_ai_in_second_actions_assertion.jpg` | Two actions assertions (created and gathered); the generative fill is only in the second. |
+| `i21_capture_generative_upscale.jpg` | n01 upscaled by a generative model: `c2pa.resized` declaring `compositeWithTrainedAlgorithmicMedia`. Compare n13 and u18. |
 | **no-ai** | |
 | `n01_camera_capture.jpg` | `digitalCapture`. |
-| `n02_capture_cropped_and_adjusted.jpg` | n01 cropped and colour-adjusted (`c2pa.adjustedColor`; `c2pa.color_adjustments` is deprecated). |
+| `n02_capture_cropped_and_adjusted.jpg` | n01 cropped and colour-adjusted; `c2pa.adjustedColor` declares `humanEdits` (`c2pa.color_adjustments` is deprecated). |
 | `n03_digital_illustration.png` | `digitalCreation`: made with non-generative tools. |
 | `n04_hdr_computational_capture.jpg` | In-camera HDR: `computationalCapture`, where IPTC puts automatic multi-frame HDR (non-generative AI at most). |
 | `n05_field_recording.wav` | Audio `digitalCapture`. |
@@ -80,6 +84,8 @@ classifier gives are in [`labels.json`](labels.json).
 | `n09_ai_component_deleted_via_template_parameters.jpg` | As n07, but the deletion's reference comes from a template's deprecated `templateParameters`, which consumers must still merge. |
 | `n10_computational_capture_with_model_disclosure.jpg` | `computationalCapture` with a `c2pa.ai-disclosure` naming a scikit-learn model: non-generative AI that the source type already declares. |
 | `n11_capture_then_declared_human_edit.jpg` | n01 then `c2pa.edited` declaring `humanEdits`: an explicit non-generative declaration, unlike u16. |
+| `n12_ai_placed_on_action_then_deleted.jpg` | i16 with its placed element deleted. The AI was declared only on `c2pa.placed`, and that evidence goes with the component. |
+| `n13_capture_enhanced_declared_non_generative.jpg` | n01 `c2pa.enhanced`, declared `humanEdits`. |
 | **unknown** | |
 | `u01_no_manifest.jpg` | No manifest. |
 | `u02_ai_with_manifest_stripped.jpg` | Represents an AI-origin asset whose manifest was lost (a01 re-encoded). |
@@ -96,12 +102,19 @@ classifier gives are in [`labels.json`](labels.json).
 | `u14_capture_with_model_disclosure.jpg` | `digitalCapture` with a `c2pa.ai-disclosure`, but no source type declares AI use: a model was used in some undeclared way. |
 | `u15_capture_then_custom_action.jpg` | n01 with an entity-specific action and no source type. The history is complete, but what that action did is unknown. |
 | `u16_capture_then_unspecified_edit.jpg` | n01 then `c2pa.edited` with no source type. The spec doesn't require a generative edit to declare one, so even a complete history can't rule it out. |
-| `u17_ai_ingredient_redacted.jpg` | i02 opened and its AI ingredient assertion redacted. The AI content is still there; only its provenance is hidden, so redaction must not read as no AI. See [known SDK issues](#known-c2pa-rs-issues). |
+| `u18_capture_enhanced_undeclared.jpg` | n01 `c2pa.enhanced` with no source type: the action name doesn't say whether a generative model did it. |
+| `u19_update_adds_model_disclosure.jpg` | Update manifest over n01 adding a `c2pa.ai-disclosure`: unchanged content, but a model is now said to be involved in an undeclared way. |
+| `u17_ai_ingredient_redacted.jpg` | i02 opened and its AI ingredient assertion redacted, with reason `c2pa.trade-secret.present`. The AI content is still there; only its provenance is hidden, so redaction must not read as no AI. See [known SDK issues](#known-c2pa-rs-issues). |
 | **invalid** | |
 | `x01_disclosure_missing_model_type.jpg` | `c2pa.ai-disclosure` without the required `modelType`. |
 | `x02_disclosure_invalid_oversight_level.jpg` | `humanOversightLevel` outside the three allowed values. |
 | `x03_disclosure_scalar_scientific_domain.jpg` | `scientificDomain` as a string, not an array. |
 | `x04_disclosure_empty_scientific_domain.jpg` | `scientificDomain` as an empty array. |
+| `x05_disclosure_content_profile_not_a_map.jpg` | `contentProfile` as a string. |
+| `x06_disclosure_model_name_not_text.jpg` | `modelName` as a number. |
+| `x07_disclosure_null_scientific_domain.jpg` | `scientificDomain` present as null: optional fields may be absent, not null. |
+| `x08_disclosure_unknown_model_type.jpg` | Vocabulary: `modelType` not in the model-types table. |
+| `x09_disclosure_unknown_arxiv_category.jpg` | Vocabulary: `scientificDomain` matches the CDDL pattern but isn't an arXiv category. |
 
 ## The policy
 
@@ -112,7 +125,8 @@ walks the ingredient history:
    manifest → **unknown**.
 2. **Update manifests** (those with no `c2pa.hash.*` hard binding) can't change the content.
    Whatever they record (`c2pa.opened`, `c2pa.published`, `c2pa.edited.metadata`,
-   `c2pa.redacted`), they get their parent's verdict.
+   `c2pa.redacted`), they get their parent's verdict. The exception is an update that adds a
+   `c2pa.ai-disclosure` over a no-ai parent, which becomes unknown (u19).
 3. **Merging actions.** Actions are merged as the specification requires:
    - templates first: the `*` template, then same-named templates in order, then the action's
      own fields;
@@ -129,8 +143,12 @@ walks the ingredient history:
    don't count.
 6. **Later actions.** Each action from the specification's list is either one that preserves
    content or one that may add it:
-   - Preserving: cropping, resizing, colour and orientation changes, enhancement, transcoding,
-     deletion, publishing and similar.
+   - Preserving: cropping, trimming, orientation, deletion, repackaging, publishing, metadata
+     edits and similar.
+   - Processing: resizing, transcoding, colour changes, enhancement, mastering and speed changes.
+     They add no material, so they keep AI content entirely AI. But the action name doesn't say
+     whether a generative model did the processing (as in AI upscaling), so without a source
+     type they rule out no-ai. A `humanEdits` declaration settles it.
    - May add: drawing, added text, filters and styles, placing, dubbing, translation, and the
      generic `c2pa.edited` and `c2pa.modified`.
 
@@ -145,6 +163,8 @@ walks the ingredient history:
    unclear: a complete history says what was recorded, not that the classifier understands it.
 
    Every actions assertion in the manifest counts, created or gathered.
+   A `digitalSourceType` on a `c2pa.placed` whose components were all deleted later no longer
+   counts.
 7. **Redaction.** A manifest that redacts an ingredient or actions assertion from its history
    makes the result unclear. Redaction hides provenance, not content, and the spec has the
    redacted ingredient's manifest removed from the store, so its absence can't count as no AI.
@@ -200,9 +220,20 @@ validator does not enforce:
 - `c2pa.created` has a source type once templates are merged.
 - An ingredient reference into another manifest (as `c2pa.deleted` may make, including through
   `templateParameters`) has the hash that manifest's claim records.
-- `c2pa.ai-disclosure` has a `modelType`, a valid `humanOversightLevel`, and a non-empty array
-  of arXiv-style `scientificDomain` values. The `files/invalid/` fixtures each break one of
-  these, and the check expects exactly that lint error from each.
+- `c2pa.redacted` has a `reason` (Actions.adoc: it "shall contain the rationale").
+- `c2pa.ai-disclosure`, in two separate checks:
+  - **schema** (ai-disclosure.cddl): the map has only the defined fields, every present field
+    has its type (optional means absent, not null), `humanOversightLevel` is one of the three
+    values, and `scientificDomain` is a non-empty array matching the CDDL pattern;
+  - **vocabulary** (AIDisclosure.adoc prose): `modelType` is in the model-types table in
+    AssetType.adoc, and each `scientificDomain` is an arXiv category.
+
+  The `files/invalid/` fixtures each break one of these, and the check expects exactly that
+  lint error from each.
+
+  The CDDL pattern for `scientificDomain` requires a dot, but arXiv also has dotless categories
+  (`hep-th`, `gr-qc`, `quant-ph`, `math-ph`, `nucl-th` and others). Those are valid by the prose
+  and invalid by the schema; that's an inconsistency in specs-core.
 - No ingredient has both `activeManifest` and `digitalSourceType`.
 
 The lint reads `Reader::detailed_json()`, because `Reader::json()` reports a v1 `c2pa.actions`
@@ -259,4 +290,6 @@ The classifier's unit tests:
 cargo test --release
 ```
 
-The committed files were built with c2pa-rs `f5ec249b`.
+The committed files were built with c2pa-rs `f5ec249b` (branch `fix/builder-related-assertions`).
+a16 relies on that branch filling in unhashed `relatedAssertions`
+([contentauth/c2pa-rs#2986](https://github.com/contentauth/c2pa-rs/pull/2986)).

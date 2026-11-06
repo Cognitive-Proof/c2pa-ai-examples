@@ -96,6 +96,27 @@
     "classifierReason": "created as trainedAlgorithmicMedia"
   },
   {
+    "file": "files/ai/a14_ai_minimal_disclosure.jpg",
+    "expected": "ai",
+    "description": "trainedAlgorithmicMedia with the smallest valid c2pa.ai-disclosure: only modelType.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present"
+  },
+  {
+    "file": "files/ai/a15_ai_disclosure_empty_content_profile.jpg",
+    "expected": "ai",
+    "description": "As a14 with an empty contentProfile map: humanOversightLevel is optional.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present"
+  },
+  {
+    "file": "files/ai/a16_ai_two_model_disclosures.jpg",
+    "expected": "ai",
+    "description": "Two models (a text encoder and a diffusion model), each with its own c2pa.ai-disclosure, linked from c2pa.created through relatedAssertions.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present"
+  },
+  {
     "file": "files/no-ai/n01_camera_capture.jpg",
     "expected": "no-ai",
     "description": "Simulated camera capture: digitalCapture.",
@@ -107,7 +128,7 @@
     "expected": "no-ai",
     "description": "n01 cropped and colour-adjusted; only non-generative edits.",
     "validationState": "Trusted",
-    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture"
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.adjustedColor as humanEdits"
   },
   {
     "file": "files/no-ai/n03_digital_illustration.png",
@@ -285,6 +306,13 @@
     "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.edited as compositeWithTrainedAlgorithmicMedia"
   },
   {
+    "file": "files/includes-ai/i21_capture_generative_upscale.jpg",
+    "expected": "includes-ai",
+    "description": "n01 upscaled by a generative model: resizing declared compositeWithTrainedAlgorithmicMedia.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.resized as compositeWithTrainedAlgorithmicMedia"
+  },
+  {
     "file": "files/no-ai/n07_ai_component_deleted.jpg",
     "expected": "no-ai",
     "description": "i02 with its AI component removed, recorded by c2pa.deleted. AI is in the history but not in the current content.",
@@ -313,6 +341,20 @@
     "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.edited as humanEdits"
   },
   {
+    "file": "files/no-ai/n12_ai_placed_on_action_then_deleted.jpg",
+    "expected": "no-ai",
+    "description": "i16 with its placed element deleted. The AI was declared only on the c2pa.placed action, and that evidence goes with the component.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'i16_ai_declared_on_placed_action.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.deleted removes a whole component"
+  },
+  {
+    "file": "files/no-ai/n13_capture_enhanced_declared_non_generative.jpg",
+    "expected": "no-ai",
+    "description": "n01 enhanced, declared humanEdits (non-generative tools). Compare u18 and i21.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.enhanced as humanEdits"
+  },
+  {
     "file": "files/unknown/u01_no_manifest.jpg",
     "expected": "unknown",
     "description": "No C2PA manifest at all.",
@@ -338,7 +380,7 @@
     "expected": "unknown",
     "description": "Signed edit of a parent that has neither a manifest nor a declared source type.",
     "validationState": "Trusted",
-    "classifierReason": "opened parent: ingredient 'photo-unsigned.jpg' has no manifest or source type"
+    "classifierReason": "opened parent: ingredient 'photo-unsigned.jpg' has no manifest or source type; c2pa.adjustedColor has no digitalSourceType"
   },
   {
     "file": "files/unknown/u05_tampered_capture.jpg",
@@ -415,12 +457,26 @@
     "expected": "unknown",
     "description": "i02 opened and its AI ingredient assertion redacted. The AI content is still there; only its provenance is hidden, so redaction must not read as no AI.",
     "validationState": "Invalid",
-    "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; redacts self#jumbf=/c2pa/urn:c2pa:47f63b22-0420-461c-b836-8c297210d5df/c2pa.assertions/c2pa.ingredient.v3__1",
+    "classifierReason": "opened parent: ingredient 'i02_ai_element_placed.jpg' -> opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; redacts self#jumbf=/c2pa/urn:c2pa:df153919-6af2-4209-bf74-c62763ca0033/c2pa.assertions/c2pa.ingredient.v3__1",
     "knownSdkIssue": {
       "code": "assertion.action.ingredientMismatch",
       "note": "c2pa-rs rejects i02's c2pa.placed for referencing the redacted ingredient, which Validate_Assertions allows",
       "sdkVerdict": "unknown"
     }
+  },
+  {
+    "file": "files/unknown/u18_capture_enhanced_undeclared.jpg",
+    "expected": "unknown",
+    "description": "n01 enhanced with no source type. The action name doesn't say whether a generative model did it (as in AI upscaling), so a complete history can't establish no-ai.",
+    "validationState": "Trusted",
+    "classifierReason": "opened parent: ingredient 'n01_camera_capture.jpg' -> created as digitalCapture; c2pa.enhanced has no digitalSourceType"
+  },
+  {
+    "file": "files/unknown/u19_update_adds_model_disclosure.jpg",
+    "expected": "unknown",
+    "description": "Update manifest over n01 that adds a c2pa.ai-disclosure. The content is unchanged, but a model is now said to be involved in a way no source type declares.",
+    "validationState": "Trusted",
+    "classifierReason": "update manifest adds c2pa.ai-disclosure over ingredient 'untitled ingredient' -> created as digitalCapture"
   },
   {
     "file": "files/unknown/u13_empty_with_unknown_component.jpg",
@@ -432,15 +488,15 @@
   {
     "file": "files/invalid/x01_disclosure_missing_model_type.jpg",
     "expected": "ai",
-    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure; for negative schema tests, not classification.",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure (schema) or one outside the required vocabularies; for negative tests, not classification.",
     "validationState": "Trusted",
     "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
-    "expectedLint": "has no modelType"
+    "expectedLint": "modelType must be a text string"
   },
   {
     "file": "files/invalid/x02_disclosure_invalid_oversight_level.jpg",
     "expected": "ai",
-    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure; for negative schema tests, not classification.",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure (schema) or one outside the required vocabularies; for negative tests, not classification.",
     "validationState": "Trusted",
     "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
     "expectedLint": "invalid humanOversightLevel"
@@ -448,7 +504,7 @@
   {
     "file": "files/invalid/x03_disclosure_scalar_scientific_domain.jpg",
     "expected": "ai",
-    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure; for negative schema tests, not classification.",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure (schema) or one outside the required vocabularies; for negative tests, not classification.",
     "validationState": "Trusted",
     "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
     "expectedLint": "invalid scientificDomain"
@@ -456,9 +512,49 @@
   {
     "file": "files/invalid/x04_disclosure_empty_scientific_domain.jpg",
     "expected": "ai",
-    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure; for negative schema tests, not classification.",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure (schema) or one outside the required vocabularies; for negative tests, not classification.",
     "validationState": "Trusted",
     "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
     "expectedLint": "invalid scientificDomain"
+  },
+  {
+    "file": "files/invalid/x05_disclosure_content_profile_not_a_map.jpg",
+    "expected": "ai",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure (schema) or one outside the required vocabularies; for negative tests, not classification.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
+    "expectedLint": "contentProfile must be a map"
+  },
+  {
+    "file": "files/invalid/x06_disclosure_model_name_not_text.jpg",
+    "expected": "ai",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure (schema) or one outside the required vocabularies; for negative tests, not classification.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
+    "expectedLint": "modelName must be a text string"
+  },
+  {
+    "file": "files/invalid/x07_disclosure_null_scientific_domain.jpg",
+    "expected": "ai",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure (schema) or one outside the required vocabularies; for negative tests, not classification.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
+    "expectedLint": "invalid scientificDomain null"
+  },
+  {
+    "file": "files/invalid/x08_disclosure_unknown_model_type.jpg",
+    "expected": "ai",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure (schema) or one outside the required vocabularies; for negative tests, not classification.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
+    "expectedLint": "vocabulary: modelType nonsense"
+  },
+  {
+    "file": "files/invalid/x09_disclosure_unknown_arxiv_category.jpg",
+    "expected": "ai",
+    "description": "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure (schema) or one outside the required vocabularies; for negative tests, not classification.",
+    "validationState": "Trusted",
+    "classifierReason": "created as trainedAlgorithmicMedia; c2pa.ai-disclosure present",
+    "expectedLint": "is not an arXiv category"
   }
 ]

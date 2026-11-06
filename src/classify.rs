@@ -105,8 +105,12 @@ fn source_of(uri: &str) -> Source {
 /// How an action from the specification's list (`actions.yaml`) affects the content.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Effect {
-    /// Rearranges, removes or re-encodes existing content, or touches none of it.
+    /// Removes, rearranges or repackages existing content, or touches none of it.
     Preserves,
+    /// Resamples or reprocesses existing content (resizing, colour, enhancement). It adds no new
+    /// material, but the action name doesn't say whether a generative model did the processing,
+    /// as in AI upscaling.
+    Processes,
     /// May add content of its own, such as drawing, text, a filter or style, or a generic edit.
     Adds,
     /// Not a specification action, or `c2pa.unknown`: what it did can't be known.
@@ -115,13 +119,13 @@ enum Effect {
 
 fn effect_of(action: &str) -> Effect {
     match action {
-        "c2pa.adjustedColor" | "c2pa.changedSpeed" | "c2pa.color_adjustments" | "c2pa.converted"
-        | "c2pa.cropped" | "c2pa.deleted" | "c2pa.edited.metadata" | "c2pa.enhanced"
-        | "c2pa.mastered" | "c2pa.orientation" | "c2pa.published"
-        | "c2pa.redacted" | "c2pa.removed" | "c2pa.repackaged" | "c2pa.resized"
-        | "c2pa.resized.proportional" | "c2pa.reviewed" | "c2pa.transcoded" | "c2pa.trimmed"
-        | "c2pa.watermarked" | "c2pa.watermarked.bound" | "c2pa.watermarked.unbound" => {
-            Effect::Preserves
+        "c2pa.converted" | "c2pa.cropped" | "c2pa.deleted" | "c2pa.edited.metadata"
+        | "c2pa.orientation" | "c2pa.published" | "c2pa.redacted" | "c2pa.removed"
+        | "c2pa.repackaged" | "c2pa.reviewed" | "c2pa.trimmed" | "c2pa.watermarked"
+        | "c2pa.watermarked.bound" | "c2pa.watermarked.unbound" => Effect::Preserves,
+        "c2pa.adjustedColor" | "c2pa.changedSpeed" | "c2pa.color_adjustments" | "c2pa.enhanced"
+        | "c2pa.mastered" | "c2pa.resized" | "c2pa.resized.proportional" | "c2pa.transcoded" => {
+            Effect::Processes
         }
         "c2pa.unknown" => Effect::Unknown,
         a if a.starts_with("c2pa.") || a.starts_with("font.") => Effect::Adds,
@@ -135,6 +139,10 @@ fn declares_ai_use(uri: &str) -> bool {
         || uri == format!("{C2PA}trainedAlgorithmicData")
         || uri == format!("{IPTC}computationalCapture")
         || uri == format!("{IPTC}algorithmicallyEnhanced")
+}
+
+fn has_disclosure(m: &Value) -> bool {
+    m["assertions"].as_array().into_iter().flatten().any(|a| a["label"] == "c2pa.ai-disclosure")
 }
 
 fn short(uri: &str) -> &str {
@@ -211,6 +219,16 @@ pub fn merged_actions(data: &Value) -> Vec<Value> {
         with_related(merged, &mut out);
     }
     out
+}
+
+/// The ingredient assertion labels a (merged) action's `ingredients` parameter references.
+fn placed_refs(action: &Value) -> Vec<&str> {
+    action["parameters"]["ingredients"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r["url"].as_str()?.rsplit_once("c2pa.assertions/").map(|(_, l)| l))
+        .collect()
 }
 
 /// (manifest label, ingredient assertion label) of a hashed JUMBF URI.
@@ -295,6 +313,11 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
         return match parent {
             Some(p) => {
                 let (v, why) = ingredient(store, p, deleted, None);
+                // It can't change the content, but it can add what was not recorded before.
+                if v == Verdict::NoAi && has_disclosure(m) {
+                    let why = format!("update manifest adds c2pa.ai-disclosure over {why}");
+                    return (Verdict::Unknown, why);
+                }
                 (v, format!("update manifest over {why}"))
             }
             None => (Verdict::Unknown, "update manifest with no parent ingredient".into()),
@@ -319,10 +342,8 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
     let mut placed_as: HashMap<&str, &str> = HashMap::new();
     for a in actions.iter().filter(|a| a["action"] == "c2pa.placed") {
         if let Some(uri) = a["digitalSourceType"].as_str() {
-            for r in a["parameters"]["ingredients"].as_array().into_iter().flatten() {
-                if let Some(l) = r["url"].as_str().and_then(|u| u.rsplit_once("c2pa.assertions/")) {
-                    placed_as.insert(l.1, uri);
-                }
+            for l in placed_refs(a) {
+                placed_as.insert(l, uri);
             }
         }
     }
@@ -345,6 +366,9 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
     let mut unclear = false;
     // A later action may have added content that isn't AI, so an AI origin is no longer all.
     let mut mixed = false;
+    // Processing with no source type: can't rule out a generative model, but it doesn't add
+    // material, so it only stands in the way of a no-ai verdict.
+    let mut undeclared_processing = false;
     let mut ai_use_declared = false;
     let mut origin = None;
     let mut empty_origin = false;
@@ -384,6 +408,10 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
             // Placed content is judged by its componentOf ingredient below, with any source
             // type declared here filling in for an ingredient that declares none.
             ("c2pa.placed", None) => {}
+            // Evidence about a component that a later c2pa.deleted removed no longer applies.
+            ("c2pa.placed", Some(_))
+                if !placed_refs(a).is_empty()
+                    && placed_refs(a).iter().all(|l| deleted.contains(&(label.to_owned(), l.to_string()))) => {}
             ("c2pa.placed", Some(uri)) => {
                 notes.push(format!("c2pa.placed as {}", short(uri)));
                 match source_of(uri) {
@@ -395,7 +423,7 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
             (_, Some(uri)) => {
                 notes.push(format!("{name} as {}", short(uri)));
                 ai_use_declared |= declares_ai_use(uri);
-                let adds = effect_of(name) != Effect::Preserves;
+                let adds = matches!(effect_of(name), Effect::Adds | Effect::Unknown);
                 match source_of(uri) {
                     // Generative augmentation of AI content keeps it AI...
                     Source::Ai => ai_signal = true,
@@ -413,6 +441,10 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
             }
             (_, None) => match effect_of(name) {
                 Effect::Preserves => {}
+                Effect::Processes => {
+                    notes.push(format!("{name} has no digitalSourceType"));
+                    undeclared_processing = true;
+                }
                 // The spec doesn't require a generative edit to declare a source type, so an
                 // edit that may add content and declares none could be either.
                 Effect::Adds => {
@@ -454,7 +486,7 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
             ai_use_declared |= declares_ai_use(uri);
         }
     }
-    if m["assertions"].as_array().into_iter().flatten().any(|a| a["label"] == "c2pa.ai-disclosure") {
+    if has_disclosure(m) {
         if ai_use_declared || matches!(origin, Verdict::Ai | Verdict::IncludesAi) || ai_signal {
             notes.push("c2pa.ai-disclosure present".into());
         } else {
@@ -487,7 +519,7 @@ fn manifest(store: Store, label: &str, deleted: &HashSet<(String, String)>) -> (
         Verdict::Ai
     } else if all_ai_inputs || origin == Verdict::Ai || origin == Verdict::IncludesAi || ai_signal {
         Verdict::IncludesAi
-    } else if origin == Verdict::Unknown || unclear || !complete {
+    } else if origin == Verdict::Unknown || unclear || undeclared_processing || !complete {
         Verdict::Unknown
     } else {
         Verdict::NoAi
@@ -648,6 +680,19 @@ mod tests {
         // An explicit non-generative declaration settles it.
         assert_eq!(after_capture(json!({ "action": "c2pa.edited", "digitalSourceType": HUMAN_EDITS })), Verdict::NoAi);
         assert_eq!(after_capture(json!({ "action": "c2pa.cropped" })), Verdict::NoAi);
+    }
+
+    #[test]
+    fn undeclared_processing_rules_out_no_ai_only() {
+        let after = |origin: &str, edit: Value| {
+            single(json!({ "actions": [{ "action": "c2pa.created", "digitalSourceType": origin }, edit], "allActionsIncluded": true }))
+        };
+        // Enhancement or resizing could be a generative model (AI upscaling)...
+        assert_eq!(after(CAPTURE, json!({ "action": "c2pa.enhanced" })), Verdict::Unknown);
+        assert_eq!(after(CAPTURE, json!({ "action": "c2pa.resized" })), Verdict::Unknown);
+        assert_eq!(after(CAPTURE, json!({ "action": "c2pa.resized", "digitalSourceType": HUMAN_EDITS })), Verdict::NoAi);
+        // ...but it adds no material, so AI content stays entirely AI.
+        assert_eq!(after(AI, json!({ "action": "c2pa.resized" })), Verdict::Ai);
     }
 
     #[test]

@@ -363,6 +363,8 @@ fn main() -> Result<()> {
     sources::paste(&mut with_photo, &photo, 360, 260, 240, 180);
     with_photo.save(g.src("dream-with-photo.jpg"))?;
     sources::adjust(&dream).save(g.src("dream-adjusted.jpg"))?;
+    image::imageops::resize(&photo, 1280, 960, image::imageops::FilterType::CatmullRom)
+        .save(g.src("photo-upscaled.jpg"))?;
     let mut inpainted = dream.clone();
     sources::paste(&mut inpainted, &sources::dream(2.5), 380, 210, 200, 180);
     inpainted.save(g.src("dream-inpainted.jpg"))?;
@@ -484,12 +486,42 @@ fn main() -> Result<()> {
         &[Ing { relationship: "inputTo", id: "reference", path: &reference, source_type: None }],
         "Text-to-image with an unsigned reference image as an inputTo ingredient. An input to the model is not placed content, so its unknown provenance doesn't matter.")?;
 
+    g.sign_with(Ai, "a14_ai_minimal_disclosure.jpg", &g.src("dream.jpg"), &[],
+        "trainedAlgorithmicMedia with the smallest valid c2pa.ai-disclosure: only modelType.", |b| {
+            b.add_assertion("c2pa.actions.v2", &actions(vec![created("trainedAlgorithmicMedia", model(), "Generated from a text prompt")], true))?;
+            b.add_assertion("c2pa.ai-disclosure", &json!({ "modelType": "c2pa.types.model" }))?;
+            Ok(())
+        })?;
+    g.sign_with(Ai, "a15_ai_disclosure_empty_content_profile.jpg", &g.src("dream.jpg"), &[],
+        "As a14 with an empty contentProfile map: humanOversightLevel is optional.", |b| {
+            b.add_assertion("c2pa.actions.v2", &actions(vec![created("trainedAlgorithmicMedia", model(), "Generated from a text prompt")], true))?;
+            b.add_assertion("c2pa.ai-disclosure", &json!({ "modelType": "c2pa.types.model", "contentProfile": {} }))?;
+            Ok(())
+        })?;
+    g.sign_with(Ai, "a16_ai_two_model_disclosures.jpg", &g.src("dream.jpg"), &[],
+        "Two models (a text encoder and a diffusion model), each with its own c2pa.ai-disclosure, linked from c2pa.created through relatedAssertions.", |b| {
+            b.add_assertion("c2pa.ai-disclosure", &json!({
+                "modelType": "c2pa.types.model.huggingface.transformers",
+                "modelName": "Fabrikam Text Encoder",
+                "scientificDomain": ["cs.CL"],
+            }))?;
+            b.add_assertion("c2pa.ai-disclosure", &disclosure("prompt_guided"))?;
+            let mut action = created("trainedAlgorithmicMedia", model(), "Generated from a text prompt");
+            action["parameters"] = json!({ "relatedAssertions": [{ "url": "c2pa.ai-disclosure" }, { "url": "c2pa.ai-disclosure__1" }] });
+            b.add_assertion("c2pa.actions.v2", &actions(vec![action], true))?;
+            Ok(())
+        })?;
+
     // ---- no-ai: the declared, complete history has no trained model in the current content -
     let n01 = g.sign(NoAi, "n01_camera_capture.jpg", &g.src("photo.jpg"),
         actions(vec![created("digitalCapture", camera(), "Captured by camera")], true), &[],
         "Simulated camera capture: digitalCapture.")?;
     g.sign(NoAi, "n02_capture_cropped_and_adjusted.jpg", &g.src("photo-cropped-adjusted.jpg"),
-        actions(vec![opened(), edit("c2pa.cropped", editor()), edit("c2pa.adjustedColor", editor())], true),
+        actions(vec![opened(), edit("c2pa.cropped", editor()), json!({
+            "action": "c2pa.adjustedColor",
+            "digitalSourceType": dst("humanEdits"),
+            "softwareAgent": editor(),
+        })], true),
         &[parent(&n01)],
         "n01 cropped and colour-adjusted; only non-generative edits.")?;
     g.sign(NoAi, "n03_digital_illustration.png", &g.src("illustration.png"),
@@ -604,7 +636,7 @@ fn main() -> Result<()> {
         "i02 cropped so the placed AI element is outside the frame. A crop doesn't say what it removed, so the AI is still in the provenance and its removal isn't established.")?;
 
     let raw_ai_element = g.src("dream.jpg");
-    g.sign(IncludesAi, "i16_ai_declared_on_placed_action.jpg", &g.src("photo-placed.jpg"),
+    let i16 = g.sign(IncludesAi, "i16_ai_declared_on_placed_action.jpg", &g.src("photo-placed.jpg"),
         actions(vec![opened(), json!({
             "action": "c2pa.placed",
             "digitalSourceType": dst("trainedAlgorithmicMedia"),
@@ -660,6 +692,16 @@ fn main() -> Result<()> {
             Ok(())
         })?;
 
+    g.sign(IncludesAi, "i21_capture_generative_upscale.jpg", &g.src("photo-upscaled.jpg"),
+        actions(vec![opened(), json!({
+            "action": "c2pa.resized",
+            "digitalSourceType": dst("compositeWithTrainedAlgorithmicMedia"),
+            "softwareAgent": agent("Fabrikam Upscaler", "2.0"),
+            "description": "Generative 2x upscale",
+        })], true),
+        &[parent(&n01)],
+        "n01 upscaled by a generative model: resizing declared compositeWithTrainedAlgorithmicMedia.")?;
+
     let target = component_ref(&g.ctx, &i02)?;
     g.sign_with(NoAi, "n07_ai_component_deleted.jpg", &g.src("photo.jpg"), &[parent(&i02)],
         "i02 with its AI component removed, recorded by c2pa.deleted. AI is in the history but not in the current content.", |b| {
@@ -688,6 +730,22 @@ fn main() -> Result<()> {
         })], true),
         &[parent(&n01)],
         "n01 edited with an explicit humanEdits source type: an affirmative non-generative declaration, unlike u16.")?;
+
+    let i16_component = component_ref(&g.ctx, &i16)?;
+    g.sign_with(NoAi, "n12_ai_placed_on_action_then_deleted.jpg", &g.src("photo.jpg"), &[parent(&i16)],
+        "i16 with its placed element deleted. The AI was declared only on the c2pa.placed action, and that evidence goes with the component.", |b| {
+            b.add_assertion("c2pa.actions.v2", &deleted_actions(i16_component, false)?)?;
+            Ok(())
+        })?;
+    g.sign(NoAi, "n13_capture_enhanced_declared_non_generative.jpg", &g.src("photo-enhanced.jpg"),
+        actions(vec![opened(), json!({
+            "action": "c2pa.enhanced",
+            "digitalSourceType": dst("humanEdits"),
+            "softwareAgent": editor(),
+            "description": "Noise reduction and sharpening",
+        })], true),
+        &[parent(&n01)],
+        "n01 enhanced, declared humanEdits (non-generative tools). Compare u18 and i21.")?;
 
     // ---- unknown: the provenance cannot settle the question -------------------------------
     let u01 = g.out(Unknown, "u01_no_manifest.jpg");
@@ -772,6 +830,7 @@ fn main() -> Result<()> {
     builder.add_assertion("c2pa.actions.v2", &actions(vec![opened(), json!({
         "action": "c2pa.redacted",
         "softwareAgent": editor(),
+        "reason": "c2pa.trade-secret.present",
         "parameters": { "redacted": redacted },
     })], true))?;
     g.save(&mut builder, &g.src("photo-placed.jpg"), &out)?;
@@ -783,6 +842,20 @@ fn main() -> Result<()> {
             "c2pa-rs rejects i02's c2pa.placed for referencing the redacted ingredient, which Validate_Assertions allows")),
         expected_lint: None,
     });
+    g.sign(Unknown, "u18_capture_enhanced_undeclared.jpg", &g.src("photo-enhanced.jpg"),
+        actions(vec![opened(), json!({
+            "action": "c2pa.enhanced",
+            "softwareAgent": editor(),
+            "description": "Noise reduction and sharpening",
+        })], true),
+        &[parent(&n01)],
+        "n01 enhanced with no source type. The action name doesn't say whether a generative model did it (as in AI upscaling), so a complete history can't establish no-ai.")?;
+    g.sign_with(Unknown, "u19_update_adds_model_disclosure.jpg", &n01, &[],
+        "Update manifest over n01 that adds a c2pa.ai-disclosure. The content is unchanged, but a model is now said to be involved in a way no source type declares.", |b| {
+            b.set_intent(BuilderIntent::Update);
+            b.add_assertion("c2pa.ai-disclosure", &model_disclosure("c2pa.types.model.pytorch", "Northwind Scene Model"))?;
+            Ok(())
+        })?;
     g.sign(Unknown, "u13_empty_with_unknown_component.jpg", &g.src("photo-unsigned.jpg"),
         actions(vec![empty_created(), placed("photo", editor())], true),
         &[component("photo", &unsigned_photo)],
@@ -790,7 +863,7 @@ fn main() -> Result<()> {
 
     // ---- invalid: deliberately malformed c2pa.ai-disclosure, for negative schema tests -----
     let bad = [
-        ("x01_disclosure_missing_model_type.jpg", json!({ "modelName": "Fabrikam Diffusion" }), "has no modelType"),
+        ("x01_disclosure_missing_model_type.jpg", json!({ "modelName": "Fabrikam Diffusion" }), "modelType must be a text string"),
         ("x02_disclosure_invalid_oversight_level.jpg",
             json!({ "modelType": "c2pa.types.model", "contentProfile": { "humanOversightLevel": "mostly_autonomous" } }),
             "invalid humanOversightLevel"),
@@ -798,6 +871,16 @@ fn main() -> Result<()> {
             json!({ "modelType": "c2pa.types.model", "scientificDomain": "cs.CV" }), "invalid scientificDomain"),
         ("x04_disclosure_empty_scientific_domain.jpg",
             json!({ "modelType": "c2pa.types.model", "scientificDomain": [] }), "invalid scientificDomain"),
+        ("x05_disclosure_content_profile_not_a_map.jpg",
+            json!({ "modelType": "c2pa.types.model", "contentProfile": "bad" }), "contentProfile must be a map"),
+        ("x06_disclosure_model_name_not_text.jpg",
+            json!({ "modelType": "c2pa.types.model", "modelName": 42 }), "modelName must be a text string"),
+        ("x07_disclosure_null_scientific_domain.jpg",
+            json!({ "modelType": "c2pa.types.model", "scientificDomain": null }), "invalid scientificDomain null"),
+        ("x08_disclosure_unknown_model_type.jpg",
+            json!({ "modelType": "nonsense" }), "vocabulary: modelType nonsense"),
+        ("x09_disclosure_unknown_arxiv_category.jpg",
+            json!({ "modelType": "c2pa.types.model", "scientificDomain": ["not.ACategory"] }), "is not an arXiv category"),
     ];
     for (name, data, expect) in bad {
         let out = root.join("files/invalid").join(name);
@@ -808,7 +891,7 @@ fn main() -> Result<()> {
         g.labels.push(Label {
             path: out,
             expected: Ai,
-            story: "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure; for negative schema tests, not classification.",
+            story: "Valid trainedAlgorithmicMedia file with a malformed c2pa.ai-disclosure (schema) or one outside the required vocabularies; for negative tests, not classification.",
             known_sdk_issue: None,
             expected_lint: Some(expect),
         });
